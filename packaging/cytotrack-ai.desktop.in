@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=CytoTrack AI
+GenericName=Cell Migration Analysis
+Comment=Track and analyse cell migration in microscopy image sequences
+Exec=@EXEC@
+Icon=@ICON@
+Terminal=false
+Categories=Science;Biology;ImageProcessing;Education;
+Keywords=cell;tracking;microscopy;migration;biology;analysis;
+StartupWMClass=CytoTrack AI
+StartupNotify=true

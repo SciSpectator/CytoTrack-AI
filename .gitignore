@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+
+# Virtual environments
+cell_track_venv/
+venv/
+env/
+.venv/
+
+# Tracking runtime outputs
+test_data/tracking_*/
+tracking_*/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Claude local
+.claude/
