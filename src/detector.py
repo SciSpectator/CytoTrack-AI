@@ -13,6 +13,7 @@ Strategies
 5. Hough circles (backup for round cells).
 """
 
+import re
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
@@ -99,13 +100,27 @@ class CellDetector:
         # fails to load and we fall back.
         "ai":     {"nms_iou_thr": 0.45, "nms_center_frac": 0.55,
                    "min_area_factor": 0.18},
+        # NVIDIA LocateAnything-3B backend. A generalist vision-language
+        # box-grounding model: it localises cells as bounding boxes from a
+        # text query, per frame. It does NOT track — cross-frame identity
+        # is still the tracker's job. It is NOT cell-trained, so on dense
+        # fields it may under-detect; the classical pipeline is the
+        # fallback if the model can't load. NMS params below dedupe the
+        # returned boxes (or apply to the fallback). License is NVIDIA
+        # non-commercial (academic/research only).
+        "locate": {"nms_iou_thr": 0.45, "nms_center_frac": 0.55,
+                   "min_area_factor": 0.18},
     }
 
     def __init__(self, min_area: int = 50, max_area: int = 10000,
                  expected_max_diameter: int = 60,
                  use_blob_detector: bool = True,
                  use_hough_circles: bool = True,
-                 sensitivity: str = "normal"):
+                 sensitivity: str = "normal",
+                 locate_model_path: str = "nvidia/LocateAnything-3B",
+                 locate_query: str = "cell",
+                 locate_generation_mode: str = "hybrid",
+                 locate_max_new_tokens: int = 4096):
         self.min_area = min_area
         self.max_area = max_area
         self.expected_max_diameter = expected_max_diameter
@@ -131,6 +146,17 @@ class CellDetector:
         # Lazy-loaded Cellpose-SAM model (only when sensitivity="ai").
         self._ai_model = None
         self._ai_failed = False
+        # Lazy-loaded NVIDIA LocateAnything-3B (only when sensitivity="locate").
+        self.locate_model_path = str(locate_model_path)
+        self.locate_query = str(locate_query)
+        self.locate_generation_mode = str(locate_generation_mode)
+        self.locate_max_new_tokens = int(locate_max_new_tokens)
+        self._locate_model = None
+        self._locate_tokenizer = None
+        self._locate_processor = None
+        self._locate_device = None
+        self._locate_dtype = None
+        self._locate_failed = False
 
     # ---------------------------------------------------------- public API
     def calibrate(self, image: np.ndarray) -> dict:
@@ -171,6 +197,16 @@ class CellDetector:
     def detect(self, image: np.ndarray) -> List[Detection]:
         if image is None:
             return []
+
+        # LocateAnything works on the full-colour frame, so handle it before
+        # the grayscale conversion the classical strategies need.
+        if self.sensitivity == "locate" and not self._locate_failed:
+            locate_dets = self._detect_locate(image)
+            if locate_dets is not None:
+                return self._nms(locate_dets)
+            # Fell through — log once and never retry this session.
+            self._locate_failed = True
+
         if len(image.shape) == 3:
             gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         else:
@@ -470,6 +506,128 @@ class CellDetector:
                 x=int(x), y=int(y), w=int(w), h=int(h),
                 center_x=float(cx), center_y=float(cy),
                 area=area, confidence=0.99,
+            ))
+        return detections
+
+    # ----------------------------------------- NVIDIA LocateAnything-3B
+    # Detection-only backend. Box coordinates come back normalised to the
+    # integer range [0, 1000]; this regex pulls them out of the model's
+    # text answer.
+    _LOCATE_BOX_RE = re.compile(r"<box><(\d+)><(\d+)><(\d+)><(\d+)></box>")
+
+    def _load_locate_model(self) -> bool:
+        """
+        Lazy-load NVIDIA LocateAnything-3B. Returns True if the model is
+        ready, False to signal fallback to the classical pipeline.
+
+        This is a soft dependency: it needs a recent `transformers`
+        (~4.57) plus a sizeable GPU. If anything is missing we fall back
+        rather than crash, matching the repo's optional-dependency policy.
+        """
+        if self._locate_model is not None:
+            return True
+        try:
+            import torch  # type: ignore
+            from transformers import (  # type: ignore
+                AutoModel, AutoTokenizer, AutoProcessor,
+            )
+            use_cuda = bool(torch.cuda.is_available())
+            self._locate_device = "cuda" if use_cuda else "cpu"
+            self._locate_dtype = torch.bfloat16 if use_cuda else torch.float32
+            self._locate_tokenizer = AutoTokenizer.from_pretrained(
+                self.locate_model_path, trust_remote_code=True)
+            self._locate_processor = AutoProcessor.from_pretrained(
+                self.locate_model_path, trust_remote_code=True)
+            self._locate_model = AutoModel.from_pretrained(
+                self.locate_model_path,
+                torch_dtype=self._locate_dtype,
+                trust_remote_code=True,
+            ).to(self._locate_device).eval()
+            print(f"[detector] LocateAnything-3B loaded "
+                  f"(device={self._locate_device})")
+            return True
+        except Exception as e:  # pragma: no cover - depends on env
+            print(f"[detector] LocateAnything load failed ({e}); "
+                  f"falling back to classical pipeline")
+            self._locate_model = None
+            return False
+
+    def _detect_locate(self, image: np.ndarray) -> Optional[List[Detection]]:
+        """
+        Run LocateAnything-3B on `image` (BGR or grayscale ndarray) and
+        return a list of box `Detection`s, or None if the backend is
+        unavailable (so the caller can fall back).
+
+        The model only localises — it has no temporal awareness. Velocity,
+        MSD, persistence and every other migration metric stay the
+        responsibility of the tracker + MigrationAnalyzer downstream.
+        """
+        if not self._load_locate_model():
+            return None
+        try:
+            import torch  # type: ignore
+            from PIL import Image  # type: ignore
+
+            if image.ndim == 2:
+                rgb = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+            else:
+                rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            pil = Image.fromarray(rgb)
+            W, H = pil.size
+
+            question = ("Locate all the instances that matches the following "
+                        f"description: {self.locate_query}.")
+            messages = [{"role": "user", "content": [
+                {"type": "image", "image": pil},
+                {"type": "text", "text": question},
+            ]}]
+
+            proc = self._locate_processor
+            text = proc.py_apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True)
+            images, videos = proc.process_vision_info(messages)
+            inputs = proc(text=[text], images=images, videos=videos,
+                          return_tensors="pt").to(self._locate_device)
+
+            with torch.no_grad():
+                response = self._locate_model.generate(
+                    pixel_values=inputs["pixel_values"].to(self._locate_dtype),
+                    input_ids=inputs["input_ids"],
+                    attention_mask=inputs["attention_mask"],
+                    image_grid_hws=inputs.get("image_grid_hws", None),
+                    tokenizer=self._locate_tokenizer,
+                    max_new_tokens=self.locate_max_new_tokens,
+                    use_cache=True,
+                    generation_mode=self.locate_generation_mode,
+                    do_sample=False,
+                    repetition_penalty=1.1,
+                    verbose=False,
+                )
+            answer = response[0] if isinstance(response, tuple) else response
+            if not isinstance(answer, str):
+                answer = str(answer)
+        except Exception as e:  # pragma: no cover - depends on env
+            print(f"[detector] LocateAnything eval error ({e}); falling back")
+            return None
+
+        detections: List[Detection] = []
+        for m in self._LOCATE_BOX_RE.finditer(answer):
+            x1, y1, x2, y2 = (int(g) for g in m.groups())
+            # De-normalise from [0, 1000] to pixels and order the corners.
+            px1 = min(x1, x2) / 1000.0 * W
+            py1 = min(y1, y2) / 1000.0 * H
+            px2 = max(x1, x2) / 1000.0 * W
+            py2 = max(y1, y2) / 1000.0 * H
+            w = int(round(px2 - px1))
+            h = int(round(py2 - py1))
+            if w < 1 or h < 1:
+                continue
+            x = int(round(px1))
+            y = int(round(py1))
+            detections.append(Detection(
+                x=x, y=y, w=w, h=h,
+                center_x=px1 + w / 2.0, center_y=py1 + h / 2.0,
+                area=float(w * h), confidence=0.9,
             ))
         return detections
 

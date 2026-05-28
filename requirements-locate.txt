@@ -1,0 +1,15 @@
+# Optional dependencies for the NVIDIA LocateAnything-3B detection backend
+# (CellDetector sensitivity="locate"). This is the default detection model
+# for tracking; if these packages or the model weights are unavailable the
+# app automatically falls back to the classical multi-strategy detector.
+#
+# Notes:
+#   * Large model (~3B params). A CUDA GPU is strongly recommended; CPU
+#     inference works but is very slow.
+#   * LICENSE: NVIDIA non-commercial — academic / non-profit research use
+#     only. Do not use for commercial purposes.
+#   * torch / torchvision come from requirements.txt.
+transformers==4.57.1
+peft
+decord
+lmdb

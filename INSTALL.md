@@ -17,6 +17,16 @@
 3. Launch from the Applications menu (search "CytoTrack AI") or
    double-click the desktop icon.
 
+> **Detection backend (NVIDIA LocateAnything-3B).** The installers also
+> install `requirements-locate.txt`, which enables the default
+> LocateAnything-3B detector. This is a ~3B-parameter model (GPU strongly
+> recommended) under the **NVIDIA non-commercial license** (academic /
+> non-profit research only). The model weights download on first use. If
+> the dependencies or weights are unavailable, the app automatically falls
+> back to the classical multi-strategy detector — nothing breaks. To skip
+> installing this backend, set `CYTOTRACK_SKIP_LOCATE=1` before running the
+> installer.
+
 To remove the menu entry / desktop icon (but keep the project files):
 
 ```bash

@@ -10,3 +10,5 @@ PyQt5>=5.15.0
 torch>=2.0.0
 torchvision>=0.15.0
 transformers>=4.30.0
+# Optional NVIDIA LocateAnything-3B detection backend: see requirements-locate.txt
+# (installed by the setup scripts unless CYTOTRACK_SKIP_LOCATE is set).

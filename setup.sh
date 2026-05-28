@@ -25,6 +25,16 @@ source "$VENV/bin/activate"
 pip install --upgrade pip wheel
 pip install -r requirements.txt
 
+# Optional NVIDIA LocateAnything-3B detection backend (default detector).
+# NVIDIA non-commercial license; ~3B-param model, GPU recommended. The app
+# falls back to the classical detector if this fails. Set
+# CYTOTRACK_SKIP_LOCATE=1 to skip.
+if [ -z "$CYTOTRACK_SKIP_LOCATE" ]; then
+    echo "Installing optional LocateAnything-3B backend (NVIDIA non-commercial license)..."
+    pip install -r requirements-locate.txt || \
+        echo "LocateAnything deps not installed; the app will use the classical detector."
+fi
+
 chmod +x launch.sh
 echo ""
 echo "Done. Run ./launch.sh to start CytoTrack AI."

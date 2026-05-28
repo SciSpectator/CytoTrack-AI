@@ -374,7 +374,7 @@ def run_tracking(gui):
             return
 
         detector = CellDetector(min_area=50, max_area=8000,
-                                sensitivity="ai")
+                                sensitivity="locate")
         detector.calibrate(first_frame)
         detections = detector.detect(first_frame)
 
@@ -438,14 +438,14 @@ def run_tracking(gui):
         classifier_kind=classifier_kind,
         single_cell_type=single_cell_type,
         manual_types=manual_types,
-        sensitivity="ai",
+        sensitivity="locate",
     )
 
 
 def _do_tracking(gui, files, pixel_size, time_per_frame,
                  classifier=None, classifier_kind: Optional[str] = None,
                  single_cell_type=None, manual_types=None,
-                 sensitivity: str = "ai"):
+                 sensitivity: str = "locate"):
     import cv2
     import numpy as np
     from datetime import datetime
