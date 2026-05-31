@@ -286,6 +286,20 @@ python3 tests/run_all.py
 
 The suite covers the tracker, detector, GUI visibility, self-repair loop, pipeline architecture contracts, public-data training agents, debris reasoning, hardware profiling, lost-cell recovery, overlap-safe tracking, and the open-image-library licence filter.
 
+For a heavier microscopy validation pass, run the 30-clip stress test against
+the local public Cell Tracking Challenge movies:
+
+```bash
+python3 tools/stress_test_30_movies.py --clips 30 --window 8 --max-side 384 --clean
+```
+
+It writes `RESULT/stress_30_movies/` with one folder per clip, tracking videos,
+CSV migration metrics, plots, a consolidated `stress_30_movies_report.csv`, and
+`dashboard.html`. The gate checks include readable frames, nonzero center
+detections, repaired identity jumps, segmentation-border availability,
+metrics/plots/video output, and det/GT plausibility when manual SEG masks are
+available. `RESULT/` remains local and is not committed.
+
 ---
 
 ## Project layout
