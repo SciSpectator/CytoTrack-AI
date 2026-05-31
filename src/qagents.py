@@ -658,6 +658,42 @@ class WallArtifactCuratorQAgent:
         return self.left_margin_px <= x <= self.right_margin_px
 
 
+class MicroscopyInsetExtractionQAgent:
+    """
+    Locates a microscopy inset inside presentation/screen-recorded videos.
+
+    Some public videos embed the actual microscope field inside a larger
+    slide, social-media frame, or lecture screen. Tracking must run on the
+    microscope inset, not the full presentation frame.
+    """
+
+    def accept_crop(self,
+                    bbox: Tuple[int, int, int, int],
+                    frame_shape: Tuple[int, int],
+                    min_area_fraction: float = 0.04) -> bool:
+        h, w = int(frame_shape[0]), int(frame_shape[1])
+        x, y, bw, bh = [int(v) for v in bbox]
+        if bw <= 0 or bh <= 0:
+            return False
+        if x < 0 or y < 0 or x + bw > w or y + bh > h:
+            return False
+        area_fraction = (bw * bh) / max(1.0, float(w * h))
+        return area_fraction >= float(min_area_fraction)
+
+    def expand_crop(self,
+                    bbox: Tuple[int, int, int, int],
+                    frame_shape: Tuple[int, int],
+                    pad_fraction: float = 0.04) -> Tuple[int, int, int, int]:
+        h, w = int(frame_shape[0]), int(frame_shape[1])
+        x, y, bw, bh = [int(v) for v in bbox]
+        pad = int(round(max(bw, bh) * float(pad_fraction)))
+        x1 = max(0, x - pad)
+        y1 = max(0, y - pad)
+        x2 = min(w, x + bw + pad)
+        y2 = min(h, y + bh + pad)
+        return (x1, y1, x2 - x1, y2 - y1)
+
+
 class DashboardQAgent:
     """Defines the minimum dashboard assets expected from a tracking run."""
 
@@ -785,6 +821,7 @@ class MorphologyTrainingQAgent:
                 "FrameMemoryQAgent: carries per-cell center, velocity, and appearance memory into the next frame",
                 "BottomRegionCoverageQAgent: audits lower-frame cells so bottom migration is not lost",
                 "WallArtifactCuratorQAgent: removes chamber-wall artifact bands before counting cells",
+                "MicroscopyInsetExtractionQAgent: crops microscope inset before detection in presentation videos",
                 "WebsiteResearchQAgent: finds public microscopy dataset candidates",
                 "LicenceCuratorQAgent: blocks non-open or undersized sources",
                 "UserDataTrainingQAgent: validates local class folders when the user provides training images",

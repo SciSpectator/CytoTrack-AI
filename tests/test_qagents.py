@@ -6,6 +6,7 @@ from qagents import (ConditionMatcherQAgent, DetectorEnsembleQAgent,
                      PerCellVisualAgentQAgent, StaticArtifactCuratorQAgent,
                      VideoMorphologyTrainingQAgent, FrameMemoryQAgent,
                      BottomRegionCoverageQAgent, WallArtifactCuratorQAgent,
+                     MicroscopyInsetExtractionQAgent,
                      UserDataTrainingQAgent,
                      parse_cell_lines)
 
@@ -147,3 +148,12 @@ def test_bottom_region_and_wall_artifact_curators():
     assert wall.accept_center(120) is True
     assert wall.accept_center(20) is False
     assert wall.accept_center(330) is False
+
+
+def test_microscopy_inset_extraction_qagent_validates_and_expands_crop():
+    agent = MicroscopyInsetExtractionQAgent()
+    assert agent.accept_crop((50, 60, 120, 90), (300, 400)) is True
+    assert agent.accept_crop((390, 60, 120, 90), (300, 400)) is False
+
+    assert agent.expand_crop((50, 60, 100, 50), (200, 200),
+                             pad_fraction=0.10) == (40, 50, 120, 70)

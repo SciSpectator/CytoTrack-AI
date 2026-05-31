@@ -32,6 +32,7 @@ def test_quality_first_plan_contains_backend_registries(tmp_path):
     assert "FrameMemoryQAgent" in plan.qagents
     assert "BottomRegionCoverageQAgent" in plan.qagents
     assert "WallArtifactCuratorQAgent" in plan.qagents
+    assert "MicroscopyInsetExtractionQAgent" in plan.qagents
     assert "VisualBorderAgent" in plan.qagents
     assert plan.tracking_constraints["track_point"] == (
         "mask_centroid_or_distance_transform_center")
@@ -49,6 +50,8 @@ def test_quality_first_plan_contains_backend_registries(tmp_path):
         "frame_memory_required_for_dense_video"] is True
     assert plan.tracking_constraints["bottom_region_coverage_audit"] is True
     assert plan.tracking_constraints["wall_artifact_curator_required"] is True
+    assert plan.tracking_constraints[
+        "microscopy_inset_extraction_before_tracking"] is True
 
 
 def test_model_cache_root_is_not_result(tmp_path):
