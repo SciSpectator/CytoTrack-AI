@@ -386,9 +386,6 @@ class FancyGUI(QMainWindow):
         ("Train Cell Line",
          "Public data search or local files for each requested line",
          "TRAIN_ONLINE"),
-        ("Train Phenotype",
-         "Same workflow for phenotypes: website approval or local data",
-         "TRAIN"),
         ("Analyze Results", "Load a previous CSV and regenerate plots",
          "ANALYZE"),
         ("Help", "Workflow, outputs, and current feature set", "HELP"),
@@ -519,7 +516,6 @@ class FancyGUI(QMainWindow):
     def _on_menu(self, key: str) -> None:
         mapping = {
             "TRACK": "Track Cells",
-            "TRAIN": "Train Phenotype",
             "TRAIN_ONLINE": "Train Cell Line",
             "ANALYZE": "Analyze Results",
             "HELP": "Help",

@@ -64,12 +64,10 @@ def main():
                 break
             elif "Track" in choice:
                 run_tracking(gui)
-            elif "Train Cell Line" in choice or "Train Phenotype" in choice:
-                run_cell_line_or_phenotype_training(gui)
-            elif "Train Phenotype (Online" in choice or "Online DB" in choice:
-                run_training_online(gui)
+            elif "Train Cell Line" in choice:
+                run_cell_line_training(gui)
             elif "Train" in choice:
-                run_cell_line_or_phenotype_training(gui)
+                run_cell_line_training(gui)
             elif "Analyze" in choice:
                 run_analysis(gui)
             elif "Help" in choice:
@@ -324,12 +322,12 @@ def _ask_tracking_cell_line_context(gui):
     }
 
 
-def run_cell_line_or_phenotype_training(gui):
-    """Unified GUI path for cell-line and phenotype morphology training."""
+def run_cell_line_training(gui):
+    """Unified GUI path for cell-line morphology training."""
     from qagents import parse_cell_lines
 
     params = gui.show_input_dialog(
-        "Train Cell Line / Phenotype",
+        "Train Cell Line",
         [
             "Cell line(s), comma separated",
             "Microscopy condition",

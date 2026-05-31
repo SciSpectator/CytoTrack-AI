@@ -48,7 +48,6 @@ Launch:
 Menu:
   * Track Cells          — full migration-tracking pipeline
   * Train Cell Line      — public data approval or local class folders
-  * Train Phenotype      — same workflow for phenotype models
   * Analyze Existing Data
 
 Tracking setup:

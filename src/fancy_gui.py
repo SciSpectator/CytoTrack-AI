@@ -548,7 +548,6 @@ class FancyGUI:
         menu = [
             ("Track Cells",         "Full migration-tracking pipeline"),
             ("Train Cell Line",     "Public data search or local files"),
-            ("Train Phenotype",     "Same workflow for phenotypes"),
             ("Analyze Existing Data", "Replot from CSV summaries"),
             ("Help & About",        "Workflow & version info"),
             ("Exit",                "Quit the application"),

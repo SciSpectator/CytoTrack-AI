@@ -27,7 +27,7 @@ def test_desktop_gui_main_menu_is_visible_and_simplified(tmp_path, monkeypatch):
         joined = "\n".join(button_texts)
         assert "Track Cells" in joined
         assert "Train Cell Line" in joined
-        assert "Train Phenotype" in joined
+        assert "Train Phenotype" not in joined
         assert "Public data search or local files" in joined
         assert "Analyze Results" in joined
         assert "Generate Test" not in joined

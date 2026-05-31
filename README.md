@@ -5,8 +5,8 @@
 <h1 align="center">CytoTrack AI</h1>
 
 <p align="center">
-  <b>Cell migration tracking &amp; phenotype analysis — desktop, open-source, AI-assisted.</b><br/>
-  <sub>Kalman + Hungarian tracking · multi-strategy detector · phenotype classifier training · open-licensed image database search</sub>
+  <b>Cell migration tracking &amp; cell-line analysis — desktop, open-source, AI-assisted.</b><br/>
+  <sub>Kalman + Hungarian tracking · multi-strategy detector · cell-line morphology training · open-licensed image database search</sub>
 </p>
 
 <p align="center">
@@ -34,12 +34,11 @@ CytoTrack AI is built around a full cell-migration workflow:
 
 - **Track cells in time-lapse microscopy movies.** Select a folder of image frames, adjust brightness/contrast/gamma/filter settings, detect cell borders, and track cell centers frame by frame.
 - **Train cell-line morphology before tracking.** Enter one or more cell lines, then train from approved public data or from local user-provided folders.
-- **Train phenotype classifiers.** Use the same training workflow for phenotypes such as treated/untreated, healthy/diseased, resistant/sensitive, or custom experiment labels.
 - **Use public data with approval.** The program searches curated open-licensed public microscopy resources, shows the proposed datasets and licenses, and downloads only after the user approves.
-- **Use local laboratory data.** Select a folder with one subfolder per cell line or phenotype; the program checks that requested classes are present before training.
+- **Use local laboratory data.** Select a folder with one subfolder per cell line; the program checks that requested classes are present before training.
 - **Load an existing model.** Reuse a trained `class_map.json` model during tracking.
 - **Measure migration.** Export per-cell and per-track measurements such as velocity, total distance, displacement, persistence, confinement ratio, and MSD.
-- **Compare cell lines or phenotypes.** Generate statistical summaries and plots for multiple labelled groups.
+- **Compare cell lines.** Generate statistical summaries and plots for multiple labelled groups.
 - **Generate visual outputs.** Save overlay videos, trajectory plots, velocity histograms, displacement plots, rose plots, MSD plots, and interactive Plotly dashboards.
 - **Audit tracking quality.** Keep QC manifests, detection repair reports, identity warnings, and settings used for each run.
 - **Prepare paper-ready local result folders.** Results are saved locally under `RESULT/` or run-specific output folders and are intentionally not committed to GitHub.
@@ -50,7 +49,6 @@ Main menu actions:
 | --- | --- |
 | **Track Cells** | Runs the full tracking and migration-analysis workflow. |
 | **Train Cell Line** | Trains morphology recognition from approved public data or local user folders. |
-| **Train Phenotype** | Uses the same training workflow for experiment-specific phenotype labels. |
 | **Analyze Results** | Reopens existing CSV outputs and regenerates analysis plots. |
 | **Help** | Shows workflow and output guidance inside the app. |
 
@@ -203,7 +201,6 @@ flowchart LR
     F --> G[Migration analysis<br/>CSV + plots + video]
 
     B -->|Train Cell Line| H[Public data approval<br/>or local class folders]
-    B -->|Train Phenotype| H
     H --> I[Morphology classifier]
     I --> J[Model saved → usable in Track Cells]
 
@@ -244,9 +241,9 @@ tracking_YYYYMMDD_HHMMSS/
 
 ---
 
-## Cell-line and phenotype training
+## Cell-line training
 
-Use **Train Cell Line** or **Train Phenotype** from the main menu. Both open the same workflow:
+Use **Train Cell Line** from the main menu:
 
 1. Enter one or more cell lines.
 2. Choose **Train Cell Line From Public Data** or **User Data**.
