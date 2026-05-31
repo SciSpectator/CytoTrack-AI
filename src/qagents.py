@@ -559,6 +559,64 @@ class PerCellVisualAgentQAgent:
         return True
 
 
+class FrameMemoryQAgent:
+    """
+    Maintains per-cell memory across frames for quality-first tracking.
+
+    Memory contains the last accepted center, an estimated velocity, and a
+    compact appearance vector. It lets the next-frame linker reason from the
+    previous frame instead of treating each frame independently.
+    """
+
+    def __init__(self, max_center_step_px: float = 15.0):
+        self.max_center_step_px = float(max_center_step_px)
+        self._memory: Dict[int, Dict[str, object]] = {}
+
+    def update(
+        self,
+        track_id: int,
+        frame_index: int,
+        center: Tuple[float, float],
+        appearance_vector: Optional[Iterable[float]] = None,
+    ) -> Dict[str, object]:
+        center_arr = np.asarray(center, dtype=float)
+        prev = self._memory.get(int(track_id))
+        velocity = np.zeros(2, dtype=float)
+        if prev is not None:
+            prev_center = np.asarray(prev["center"], dtype=float)
+            velocity = center_arr - prev_center
+        memory = {
+            "track_id": int(track_id),
+            "frame_index": int(frame_index),
+            "center": (float(center_arr[0]), float(center_arr[1])),
+            "velocity": (float(velocity[0]), float(velocity[1])),
+            "appearance_vector": (
+                list(appearance_vector) if appearance_vector is not None else None),
+        }
+        self._memory[int(track_id)] = memory
+        return memory
+
+    def predict_center(self, track_id: int) -> Optional[Tuple[float, float]]:
+        memory = self._memory.get(int(track_id))
+        if memory is None:
+            return None
+        c = np.asarray(memory["center"], dtype=float)
+        v = np.asarray(memory["velocity"], dtype=float)
+        p = c + v
+        return (float(p[0]), float(p[1]))
+
+    def accepts(self, track_id: int,
+                candidate_center: Tuple[float, float]) -> bool:
+        predicted = self.predict_center(track_id)
+        if predicted is None:
+            return True
+        step = float(np.hypot(
+            float(candidate_center[0]) - predicted[0],
+            float(candidate_center[1]) - predicted[1],
+        ))
+        return step <= self.max_center_step_px
+
+
 class DashboardQAgent:
     """Defines the minimum dashboard assets expected from a tracking run."""
 
@@ -683,6 +741,7 @@ class MorphologyTrainingQAgent:
                 "StaticArtifactCuratorQAgent: rejects unchanged chamber, timestamp, scale-bar, and wall texture",
                 "CellBirthCuratorQAgent: requires repeated observations before creating a new cell identity",
                 "PerCellVisualAgentQAgent: one visual agent owns one cell and refuses long center jumps",
+                "FrameMemoryQAgent: carries per-cell center, velocity, and appearance memory into the next frame",
                 "WebsiteResearchQAgent: finds public microscopy dataset candidates",
                 "LicenceCuratorQAgent: blocks non-open or undersized sources",
                 "UserDataTrainingQAgent: validates local class folders when the user provides training images",

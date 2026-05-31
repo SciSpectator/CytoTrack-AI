@@ -4,7 +4,7 @@ from qagents import (ConditionMatcherQAgent, DetectorEnsembleQAgent,
                      CellBirthCuratorQAgent, NoCellBaselineCuratorQAgent,
                      MorphologyTrainingQAgent, TrackingCuratorQAgent,
                      PerCellVisualAgentQAgent, StaticArtifactCuratorQAgent,
-                     VideoMorphologyTrainingQAgent,
+                     VideoMorphologyTrainingQAgent, FrameMemoryQAgent,
                      UserDataTrainingQAgent,
                      parse_cell_lines)
 
@@ -121,3 +121,13 @@ def test_video_morphology_training_qagent_skips_empty_baseline():
     assert manifest["training_source"] == "same_video_before_final_tracking"
     assert manifest["center_policy"] == (
         "train morphology for center detections, not edges")
+
+
+def test_frame_memory_qagent_predicts_and_gates_next_center():
+    memory = FrameMemoryQAgent(max_center_step_px=5.0)
+    memory.update(3, 10, (10.0, 10.0))
+    memory.update(3, 11, (12.0, 11.0))
+
+    assert memory.predict_center(3) == (14.0, 12.0)
+    assert memory.accepts(3, (15.0, 12.0)) is True
+    assert memory.accepts(3, (25.0, 12.0)) is False
