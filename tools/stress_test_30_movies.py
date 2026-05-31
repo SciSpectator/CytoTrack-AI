@@ -255,6 +255,7 @@ def run_clip(clip: dict, out_dir: Path, max_side: int) -> dict:
             use_blob_detector=False,
             use_hough_circles=False,
             sensitivity="low",
+            whole_cell_border=True,
         )
     else:
         detector = CellDetector(
@@ -264,6 +265,7 @@ def run_clip(clip: dict, out_dir: Path, max_side: int) -> dict:
             use_blob_detector=False,
             use_hough_circles=False,
             sensitivity="max",
+            whole_cell_border=True,
         )
         detector.calibrate(frames[0])
     detections_by_frame = [detector.detect(frame) for frame in frames]
@@ -290,6 +292,11 @@ def run_clip(clip: dict, out_dir: Path, max_side: int) -> dict:
         if gtc is not None:
             gt_counts.append(gtc)
         for det in detections:
+            contour_area = (
+                float(cv2.contourArea(det.contour))
+                if det.contour is not None else 0.0
+            )
+            border_extent = contour_area / max(1.0, float(det.w * det.h))
             detections_rows.append({
                 "frame": fi,
                 "center_x": det.center_x,
@@ -297,6 +304,8 @@ def run_clip(clip: dict, out_dir: Path, max_side: int) -> dict:
                 "w": det.w,
                 "h": det.h,
                 "area": det.area,
+                "contour_area": contour_area,
+                "border_extent": border_extent,
                 "backend": det.backend,
                 "center_source": det.center_source,
                 "has_border": det.has_border,
@@ -335,6 +344,10 @@ def run_clip(clip: dict, out_dir: Path, max_side: int) -> dict:
     border_fraction = (
         sum(1 for row in detections_rows if row["has_border"]) / max(1, len(detections_rows))
     )
+    median_border_extent = (
+        float(np.median([row["border_extent"] for row in detections_rows]))
+        if detections_rows else 0.0
+    )
     mean_gt = float(np.mean(gt_counts)) if gt_counts else None
     mean_det = float(np.mean(det_counts))
     gt_ratio = (mean_det / mean_gt) if mean_gt and mean_gt > 0 else None
@@ -353,6 +366,7 @@ def run_clip(clip: dict, out_dir: Path, max_side: int) -> dict:
         "tracks_nonzero": len(repaired) > 0,
         "identity_jumps_repaired": jump <= 28.0,
         "borders_present": border_fraction >= 0.60,
+        "whole_cell_borders": median_border_extent >= 0.55,
         "gt_count_plausible": (
             True if gt_ratio is None else 0.25 <= float(gt_ratio) <= 4.0
         ),
@@ -374,6 +388,7 @@ def run_clip(clip: dict, out_dir: Path, max_side: int) -> dict:
         "identity_splits": int(split_count),
         "max_jump_px_after_repair": round(float(jump), 3),
         "border_fraction": round(float(border_fraction), 3),
+        "median_border_extent": round(float(median_border_extent), 3),
         "mean_velocity_px_frame": (
             round(float(summary_df["Avg_Velocity_um_min"].mean()), 4)
             if not summary_df.empty and "Avg_Velocity_um_min" in summary_df else 0.0
@@ -449,6 +464,8 @@ def main() -> int:
     args = parser.parse_args()
 
     out_dir = Path(args.output)
+    if not out_dir.is_absolute():
+        out_dir = ROOT / out_dir
     if args.clean and out_dir.exists():
         shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)

@@ -157,6 +157,7 @@ class SelfRepairingDetectorLoop:
     VISUAL_AGENTS = [
         "VisualBorderAgent",
         "VisualTrackingAuditAgent",
+        "WholeCellBorderQAgent",
         "OverlayInspectionAgent",
         "MissedCellHeatmapAgent",
     ]
@@ -189,6 +190,7 @@ class SelfRepairingDetectorLoop:
             use_blob_detector=self.use_blob_detector,
             use_hough_circles=self.use_hough_circles,
             sensitivity=sensitivity,
+            whole_cell_border=True,
         )
 
     def _score(self, image: np.ndarray, sensitivity: str,

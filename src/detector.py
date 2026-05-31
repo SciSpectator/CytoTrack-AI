@@ -146,6 +146,8 @@ class CellDetector:
                  use_blob_detector: bool = True,
                  use_hough_circles: bool = True,
                  sensitivity: str = "normal",
+                 whole_cell_border: bool = False,
+                 whole_cell_border_inflate: float = 1.08,
                  locate_model_path: str = "nvidia/LocateAnything-3B",
                  locate_query: str = "cell",
                  locate_use_dspy_prompt: bool = True,
@@ -163,6 +165,8 @@ class CellDetector:
         # adaptive-threshold / Otsu / watershed strategies).
         self.use_blob_detector = bool(use_blob_detector)
         self.use_hough_circles = bool(use_hough_circles)
+        self.whole_cell_border = bool(whole_cell_border)
+        self.whole_cell_border_inflate = float(whole_cell_border_inflate)
         # Sensitivity preset — tunes NMS and min-area for dense scenes.
         if sensitivity not in self.SENSITIVITY_PRESETS:
             raise ValueError(
@@ -280,7 +284,75 @@ class CellDetector:
         if self._calibrated and self.median_area > 0:
             all_detections = self._split_merged(signal, all_detections)
 
-        return self._nms(all_detections)
+        detections = self._nms(all_detections)
+        if self.whole_cell_border:
+            detections = self._repair_whole_cell_borders(detections)
+        return detections
+
+    # ------------------------------------------------------ border repair
+    def _ellipse_contour(self, det: Detection) -> np.ndarray:
+        """
+        Return a smooth whole-cell outline for a detection bbox.
+
+        DIC/phase-contrast fallback segmentation often detects the phase rim
+        or internal texture as a jagged partial contour. For quantitative
+        tracking the center remains the key coordinate, but display and QC need
+        the border to describe the whole cell body. This ellipse is a
+        conservative body envelope based on the detection extent, not a
+        fragment trace.
+        """
+        scale = max(0.5, self.whole_cell_border_inflate)
+        cx = float(det.x) + float(det.w) / 2.0
+        cy = float(det.y) + float(det.h) / 2.0
+        ax = max(3, int(round(float(det.w) * scale / 2.0)))
+        ay = max(3, int(round(float(det.h) * scale / 2.0)))
+        pts = cv2.ellipse2Poly(
+            (int(round(cx)), int(round(cy))),
+            (ax, ay),
+            0,
+            0,
+            360,
+            4,
+        )
+        return pts.reshape((-1, 1, 2)).astype(np.int32)
+
+    def _repair_whole_cell_borders(
+        self,
+        dets: List[Detection],
+    ) -> List[Detection]:
+        """Replace fragment-like contours with full-cell body outlines."""
+        repaired: List[Detection] = []
+        for det in dets:
+            if det.w <= 0 or det.h <= 0:
+                repaired.append(det)
+                continue
+            contour_area = (
+                float(cv2.contourArea(det.contour))
+                if det.contour is not None else float(det.area)
+            )
+            bbox_area = float(max(1, det.w * det.h))
+            extent = contour_area / bbox_area
+            # Small extent means the contour is likely a DIC rim fragment or
+            # texture island. In whole-cell mode we also smooth high-extent
+            # contours so every visual border follows the same body policy.
+            if extent < 0.62 or self.whole_cell_border:
+                contour = self._ellipse_contour(det)
+                x, y, w, h = cv2.boundingRect(contour)
+                area = float(cv2.contourArea(contour))
+                repaired.append(Detection(
+                    x=int(x), y=int(y), w=int(w), h=int(h),
+                    center_x=float(x + w / 2.0),
+                    center_y=float(y + h / 2.0),
+                    area=area,
+                    confidence=det.confidence,
+                    backend=f"{det.backend}_whole_cell_border",
+                    center_source="whole_cell_bbox_center",
+                    qc_flags=[*det.qc_flags, "whole_cell_border_repaired"],
+                    contour=contour,
+                ))
+            else:
+                repaired.append(det)
+        return repaired
 
     # --------------------------------------------------------- strategies
     def _adaptive_threshold(self, gray: np.ndarray) -> List[Detection]:

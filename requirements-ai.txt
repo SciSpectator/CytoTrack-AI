@@ -1,0 +1,3 @@
+# Optional deep-learning segmentation backend.
+# Install this when you want Cellpose-SAM whole-cell instance segmentation.
+cellpose>=4.0.0

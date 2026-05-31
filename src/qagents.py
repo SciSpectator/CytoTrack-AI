@@ -15,6 +15,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from typing import Dict, Iterable, List, Optional, Tuple
 
+import cv2
 import numpy as np
 
 from cell_image_library import (Dataset, build_phenotype_folders, catalogue,
@@ -644,6 +645,30 @@ class BottomRegionCoverageQAgent:
             "bottom_fraction": fraction,
             "passes": fraction >= self.min_bottom_fraction,
         }
+
+
+class WholeCellBorderQAgent:
+    """
+    Rejects partial edge-fragment borders.
+
+    A contour can exist but still be unusable if it traces only a DIC rim,
+    lamellipodia edge, or texture island. This curator requires the instance
+    contour to occupy enough of its bbox to be a whole-cell body outline.
+    """
+
+    def __init__(self, min_extent: float = 0.55):
+        self.min_extent = float(min_extent)
+
+    def border_extent(self, contour, bbox: Tuple[int, int, int, int]) -> float:
+        if contour is None:
+            return 0.0
+        _, _, w, h = [int(v) for v in bbox]
+        area = float(max(1, w * h))
+        contour_area = float(cv2.contourArea(contour))
+        return contour_area / area
+
+    def accepts(self, contour, bbox: Tuple[int, int, int, int]) -> bool:
+        return self.border_extent(contour, bbox) >= self.min_extent
 
 
 class WallArtifactCuratorQAgent:

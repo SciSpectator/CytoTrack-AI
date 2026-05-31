@@ -1,6 +1,7 @@
 """Tests for CellDetector."""
 
 import numpy as np
+import cv2
 
 from detector import CellDetector, Detection
 
@@ -56,3 +57,24 @@ def test_detection_centroid_aligned_bbox_uses_center_not_edge():
     d = Detection(x=0, y=0, w=20, h=20,
                   center_x=100.0, center_y=80.0, area=400.0)
     assert d.centroid_aligned_bbox() == (90, 70, 20, 20)
+
+
+def test_whole_cell_border_repair_replaces_fragment_contour():
+    det = CellDetector(whole_cell_border=True)
+    fragment = np.array([[[10, 10]], [[80, 12]], [[82, 16]], [[12, 14]]],
+                        dtype=np.int32)
+    partial = Detection(
+        x=10, y=10, w=80, h=50,
+        center_x=50.0, center_y=35.0,
+        area=float(cv2.contourArea(fragment)),
+        contour=fragment,
+    )
+
+    repaired = det._repair_whole_cell_borders([partial])[0]
+
+    assert repaired.has_border
+    assert "whole_cell_border_repaired" in repaired.qc_flags
+    assert repaired.area > partial.area
+    assert repaired.area / (repaired.w * repaired.h) > 0.55
+    assert abs(repaired.center_x - 50) < 3
+    assert abs(repaired.center_y - 35) < 3

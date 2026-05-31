@@ -115,6 +115,16 @@ CYTOTRACK_INSTALL_LOCATE=1 ./install_linux.sh
 The default install remains open-source/research-paper clean and uses the
 local classical detector path.
 
+For optional deep-learning whole-cell segmentation with Cellpose-SAM, install:
+
+```bash
+pip install -r requirements-ai.txt
+```
+
+If Cellpose-SAM is unavailable, CytoTrack AI falls back to the local detector
+with whole-cell border repair, so tracking still runs without proprietary
+services.
+
 ### macOS — source
 
 ```bash
@@ -140,7 +150,7 @@ graph TB
     end
 
     subgraph Core["Detection + Tracking Pipeline"]
-        Detector["CellDetector<br/>(adaptive · Otsu · watershed ·<br/>blob · Hough · NMS)"]
+        Detector["CellDetector<br/>(Cellpose-SAM optional · adaptive · Otsu · watershed ·<br/>whole-cell border repair · NMS)"]
         DebrisReasoner["DebrisReasoner<br/>(DSPy or heuristic)"]
         Tracker["CellTracker<br/>(Kalman + Hungarian +<br/>appearance + occlusion guard)"]
         Recovery["LostCellRecovery<br/>(NCC template or visual-LLM)"]
@@ -296,9 +306,9 @@ python3 tools/stress_test_30_movies.py --clips 30 --window 8 --max-side 384 --cl
 It writes `RESULT/stress_30_movies/` with one folder per clip, tracking videos,
 CSV migration metrics, plots, a consolidated `stress_30_movies_report.csv`, and
 `dashboard.html`. The gate checks include readable frames, nonzero center
-detections, repaired identity jumps, segmentation-border availability,
-metrics/plots/video output, and det/GT plausibility when manual SEG masks are
-available. `RESULT/` remains local and is not committed.
+detections, repaired identity jumps, whole-cell border extent, metrics/plots/
+video output, and det/GT plausibility when manual SEG masks are available.
+`RESULT/` remains local and is not committed.
 
 ---
 

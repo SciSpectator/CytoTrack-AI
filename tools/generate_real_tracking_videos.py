@@ -156,6 +156,7 @@ def generate_video(
         use_blob_detector=not args.no_blob_detector,
         use_hough_circles=not args.no_hough_circles,
         sensitivity=args.sensitivity,
+        whole_cell_border=args.whole_cell_border,
     )
     detector.calibrate(first_raw)
     first_dets = detector.detect(first_raw)
@@ -240,6 +241,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--expected-max-diameter", type=int, default=60)
     parser.add_argument("--no-blob-detector", action="store_true")
     parser.add_argument("--no-hough-circles", action="store_true")
+    parser.add_argument("--whole-cell-border", action="store_true",
+                        help="repair fragment contours into full cell-body outlines")
     parser.add_argument("--max-missed", type=int, default=15)
     parser.add_argument("--fps", type=float, default=8.0)
     parser.add_argument("--fourcc", default="XVID")

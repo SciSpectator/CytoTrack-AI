@@ -5,7 +5,8 @@ from qagents import (ConditionMatcherQAgent, DetectorEnsembleQAgent,
                      MorphologyTrainingQAgent, TrackingCuratorQAgent,
                      PerCellVisualAgentQAgent, StaticArtifactCuratorQAgent,
                      VideoMorphologyTrainingQAgent, FrameMemoryQAgent,
-                     BottomRegionCoverageQAgent, WallArtifactCuratorQAgent,
+                     BottomRegionCoverageQAgent, WholeCellBorderQAgent,
+                     WallArtifactCuratorQAgent,
                      MicroscopyInsetExtractionQAgent,
                      IdentityJumpRepairQAgent,
                      UserDataTrainingQAgent,
@@ -149,6 +150,19 @@ def test_bottom_region_and_wall_artifact_curators():
     assert wall.accept_center(120) is True
     assert wall.accept_center(20) is False
     assert wall.accept_center(330) is False
+
+
+def test_whole_cell_border_qagent_rejects_fragment_contours():
+    import numpy as np
+
+    agent = WholeCellBorderQAgent(min_extent=0.55)
+    whole = np.array([[[10, 10]], [[90, 10]], [[90, 70]], [[10, 70]]],
+                     dtype=np.int32)
+    fragment = np.array([[[10, 10]], [[90, 10]], [[90, 14]], [[10, 14]]],
+                        dtype=np.int32)
+
+    assert agent.accepts(whole, (10, 10, 80, 60)) is True
+    assert agent.accepts(fragment, (10, 10, 80, 60)) is False
 
 
 def test_microscopy_inset_extraction_qagent_validates_and_expands_crop():

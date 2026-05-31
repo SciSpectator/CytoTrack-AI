@@ -31,6 +31,7 @@ def test_quality_first_plan_contains_backend_registries(tmp_path):
     assert "PerCellVisualAgentQAgent" in plan.qagents
     assert "FrameMemoryQAgent" in plan.qagents
     assert "BottomRegionCoverageQAgent" in plan.qagents
+    assert "WholeCellBorderQAgent" in plan.qagents
     assert "WallArtifactCuratorQAgent" in plan.qagents
     assert "MicroscopyInsetExtractionQAgent" in plan.qagents
     assert "IdentityJumpRepairQAgent" in plan.qagents
@@ -50,6 +51,7 @@ def test_quality_first_plan_contains_backend_registries(tmp_path):
     assert plan.tracking_constraints[
         "frame_memory_required_for_dense_video"] is True
     assert plan.tracking_constraints["bottom_region_coverage_audit"] is True
+    assert plan.tracking_constraints["whole_cell_border_required"] is True
     assert plan.tracking_constraints["wall_artifact_curator_required"] is True
     assert plan.tracking_constraints[
         "microscopy_inset_extraction_before_tracking"] is True
