@@ -15,6 +15,8 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from typing import Dict, Iterable, List, Optional, Tuple
 
+import numpy as np
+
 from cell_image_library import (Dataset, build_phenotype_folders, catalogue,
                                 is_licence_open, search)
 from pipeline_architecture import (SEGMENTATION_BACKENDS, TRACKING_BACKENDS,
@@ -426,6 +428,137 @@ class VisualAuditQAgent:
         return output_path
 
 
+class NoCellBaselineCuratorQAgent:
+    """
+    Blocks first-frame chamber/background texture from seeding tracks.
+
+    Some migration videos begin with an empty channel and cells enter later.
+    In that case frame-zero phase halos, chamber walls, timestamps, and scale
+    bars must be treated as baseline artifacts, not cells.
+    """
+
+    def allow_detections(self, frame_index: int,
+                         baseline_empty_until_frame: int = 0) -> bool:
+        return int(frame_index) > int(baseline_empty_until_frame)
+
+
+class StaticArtifactCuratorQAgent:
+    """Rejects candidates that look unchanged from the no-cell baseline."""
+
+    def accept_candidate(self,
+                         temporal_delta: float,
+                         static_artifact_score: float,
+                         min_temporal_delta: float,
+                         max_static_artifact_score: float) -> bool:
+        if temporal_delta < min_temporal_delta:
+            return False
+        if (static_artifact_score > max_static_artifact_score and
+                temporal_delta < min_temporal_delta * 1.35):
+            return False
+        return True
+
+
+class CellBirthCuratorQAgent:
+    """
+    Requires repeated observations before a new track/agent is created.
+
+    This prevents one-frame debris or wall texture from becoming a permanent
+    cell identity.
+    """
+
+    def __init__(self, required_persistence_frames: int = 3):
+        self.required_persistence_frames = int(required_persistence_frames)
+
+    def confirmed(self, observed_frame_indices: Iterable[int]) -> bool:
+        frames = sorted({int(f) for f in observed_frame_indices})
+        if len(frames) < self.required_persistence_frames:
+            return False
+        tail = frames[-self.required_persistence_frames:]
+        return all((b - a) == 1 for a, b in zip(tail, tail[1:]))
+
+
+class VideoMorphologyTrainingQAgent:
+    """
+    Plans morphology calibration from the same video before final tracking.
+
+    This is used when public/local training data are not enough for the exact
+    acquisition format. It deliberately excludes baseline frames and samples
+    later frames where the requested cell line is visible.
+    """
+
+    def select_training_frames(
+        self,
+        total_frames: int,
+        baseline_empty_until_frame: int = 1,
+        max_training_frames: int = 8,
+    ) -> List[int]:
+        total = int(total_frames)
+        start = int(baseline_empty_until_frame) + 1
+        if total <= start:
+            return []
+        usable = list(range(start, total))
+        if len(usable) <= max_training_frames:
+            return usable
+        # Bias toward later frames because migration videos often begin empty.
+        positions = np.linspace(
+            max(start, total // 4),
+            total - 1,
+            int(max_training_frames),
+        )
+        return sorted({int(round(p)) for p in positions})
+
+    def build_manifest(
+        self,
+        cell_line: str,
+        total_frames: int,
+        baseline_empty_until_frame: int = 1,
+    ) -> Dict[str, object]:
+        frames = self.select_training_frames(
+            total_frames,
+            baseline_empty_until_frame=baseline_empty_until_frame,
+        )
+        return {
+            "cell_line": cell_line,
+            "training_source": "same_video_before_final_tracking",
+            "baseline_empty_until_frame": int(baseline_empty_until_frame),
+            "selected_training_frames": frames,
+            "center_policy": "train morphology for center detections, not edges",
+        }
+
+
+class PerCellVisualAgentQAgent:
+    """
+    Owns one cell identity and refuses impossible ownership transfers.
+
+    The tracker may have many visual agents, but each agent is responsible for
+    only one cell. New detections are accepted only when their center movement
+    stays inside the configured gate and, when supplied, their appearance
+    similarity is high enough.
+    """
+
+    def __init__(self,
+                 track_id: int,
+                 max_center_step_px: float = 15.0,
+                 min_appearance_similarity: float = 0.15):
+        self.track_id = int(track_id)
+        self.max_center_step_px = float(max_center_step_px)
+        self.min_appearance_similarity = float(min_appearance_similarity)
+
+    def accept_step(self,
+                    previous_center: Tuple[float, float],
+                    candidate_center: Tuple[float, float],
+                    appearance_similarity: Optional[float] = None) -> bool:
+        dx = float(candidate_center[0]) - float(previous_center[0])
+        dy = float(candidate_center[1]) - float(previous_center[1])
+        step = (dx ** 2 + dy ** 2) ** 0.5
+        if step > self.max_center_step_px:
+            return False
+        if (appearance_similarity is not None and
+                appearance_similarity < self.min_appearance_similarity):
+            return False
+        return True
+
+
 class DashboardQAgent:
     """Defines the minimum dashboard assets expected from a tracking run."""
 
@@ -545,6 +678,11 @@ class MorphologyTrainingQAgent:
                 + ", ".join(detector_selection.selected),
                 "TrackingCuratorQAgent: selected "
                 + ", ".join(tracking_selection.selected),
+                "NoCellBaselineCuratorQAgent: blocks empty baseline frames from seeding tracks",
+                "VideoMorphologyTrainingQAgent: trains same-video morphology prototypes before final tracking",
+                "StaticArtifactCuratorQAgent: rejects unchanged chamber, timestamp, scale-bar, and wall texture",
+                "CellBirthCuratorQAgent: requires repeated observations before creating a new cell identity",
+                "PerCellVisualAgentQAgent: one visual agent owns one cell and refuses long center jumps",
                 "WebsiteResearchQAgent: finds public microscopy dataset candidates",
                 "LicenceCuratorQAgent: blocks non-open or undersized sources",
                 "UserDataTrainingQAgent: validates local class folders when the user provides training images",

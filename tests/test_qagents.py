@@ -1,7 +1,10 @@
 """Tests for morphology-pretraining QAgents."""
 
 from qagents import (ConditionMatcherQAgent, DetectorEnsembleQAgent,
+                     CellBirthCuratorQAgent, NoCellBaselineCuratorQAgent,
                      MorphologyTrainingQAgent, TrackingCuratorQAgent,
+                     PerCellVisualAgentQAgent, StaticArtifactCuratorQAgent,
+                     VideoMorphologyTrainingQAgent,
                      UserDataTrainingQAgent,
                      parse_cell_lines)
 
@@ -73,3 +76,48 @@ def test_user_data_training_qagent_requires_requested_cell_lines(tmp_path):
 
     assert report["ready"] is False
     assert report["missing_expected_cell_lines"] == ["Huh7"]
+
+
+def test_guardrail_qagents_block_baseline_artifacts_and_long_jumps():
+    baseline = NoCellBaselineCuratorQAgent()
+    assert baseline.allow_detections(0, baseline_empty_until_frame=1) is False
+    assert baseline.allow_detections(2, baseline_empty_until_frame=1) is True
+
+    artifact = StaticArtifactCuratorQAgent()
+    assert artifact.accept_candidate(
+        temporal_delta=4.0,
+        static_artifact_score=100.0,
+        min_temporal_delta=10.0,
+        max_static_artifact_score=70.0,
+    ) is False
+    assert artifact.accept_candidate(
+        temporal_delta=20.0,
+        static_artifact_score=20.0,
+        min_temporal_delta=10.0,
+        max_static_artifact_score=70.0,
+    ) is True
+
+    birth = CellBirthCuratorQAgent(required_persistence_frames=3)
+    assert birth.confirmed([4, 5]) is False
+    assert birth.confirmed([4, 5, 6]) is True
+
+    visual = PerCellVisualAgentQAgent(track_id=7, max_center_step_px=15.0)
+    assert visual.accept_step((10, 10), (20, 16)) is True
+    assert visual.accept_step((10, 10), (40, 16)) is False
+
+
+def test_video_morphology_training_qagent_skips_empty_baseline():
+    agent = VideoMorphologyTrainingQAgent()
+    frames = agent.select_training_frames(
+        total_frames=67,
+        baseline_empty_until_frame=1,
+        max_training_frames=8,
+    )
+    assert frames
+    assert min(frames) > 1
+    assert max(frames) == 66
+
+    manifest = agent.build_manifest("WM239A", total_frames=67)
+    assert manifest["training_source"] == "same_video_before_final_tracking"
+    assert manifest["center_policy"] == (
+        "train morphology for center detections, not edges")

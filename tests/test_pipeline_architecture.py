@@ -24,12 +24,24 @@ def test_quality_first_plan_contains_backend_registries(tmp_path):
     assert "UserDataTrainingQAgent" in plan.qagents
     assert "CellBorderCuratorQAgent" in plan.qagents
     assert "SelfRepairCoordinatorQAgent" in plan.qagents
+    assert "NoCellBaselineCuratorQAgent" in plan.qagents
+    assert "VideoMorphologyTrainingQAgent" in plan.qagents
+    assert "StaticArtifactCuratorQAgent" in plan.qagents
+    assert "CellBirthCuratorQAgent" in plan.qagents
+    assert "PerCellVisualAgentQAgent" in plan.qagents
     assert "VisualBorderAgent" in plan.qagents
     assert plan.tracking_constraints["track_point"] == (
         "mask_centroid_or_distance_transform_center")
     assert plan.tracking_constraints["cell_count_source"] == (
         "instance_borders_required")
     assert plan.tracking_constraints["cell_line_required_before_tracking"] is True
+    assert plan.tracking_constraints[
+        "empty_baseline_frames_must_not_seed_tracks"] is True
+    assert plan.tracking_constraints[
+        "same_video_morphology_training_before_tracking"] is True
+    assert plan.tracking_constraints[
+        "new_track_requires_temporal_persistence_frames"] == 3
+    assert plan.tracking_constraints["one_visual_agent_owns_one_cell"] is True
 
 
 def test_model_cache_root_is_not_result(tmp_path):

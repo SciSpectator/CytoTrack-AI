@@ -10,6 +10,14 @@ def test_helper_selects_heuristic_when_nothing_installed():
     assert helper.backend == "heuristic"
 
 
+def test_backend_status_does_not_expose_secrets():
+    helper = VisualLLMHelper(prefer="heuristic")
+    status = helper.backend_status()
+    assert status["selected_backend"] == "heuristic"
+    assert "AZURE_OPENAI_API_KEY" not in status.get("azure_missing", [])
+    assert not any("KEY" in str(v) for v in status.values())
+
+
 def test_verify_round_cell_is_classified_cell(single_cell_frame):
     helper = VisualLLMHelper(prefer="heuristic")
     bbox = (20, 20, 40, 40)

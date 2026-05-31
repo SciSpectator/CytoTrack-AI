@@ -8,12 +8,13 @@ Optional helper that uses a vision-language model to:
   * decide whether an ambiguous detection is a cell or debris;
   * provide a short textual explanation for the log.
 
-Three backends are supported and chosen automatically in order:
+Backends are supported and chosen automatically in order:
 
   1. vLLM  — local GPU inference with a multimodal model such as
              Qwen/Qwen2-VL-7B-Instruct.                              (fast)
-  2. Claude vision — Anthropic API (requires ANTHROPIC_API_KEY).     (cloud)
-  3. Heuristic — shape/intensity rules.                              (always)
+  2. OpenAI/Azure OpenAI vision — cloud API when fully configured.   (cloud)
+  3. Claude vision — Anthropic API (requires ANTHROPIC_API_KEY).     (cloud)
+  4. Heuristic — shape/intensity rules.                              (always)
 
 The classical heuristic backend means the wider CytoTrack pipeline
 works even on machines without GPUs or internet.
@@ -56,6 +57,32 @@ def _has_anthropic() -> bool:
         return False
 
 
+def _has_openai() -> bool:
+    if not os.environ.get("OPENAI_API_KEY"):
+        return False
+    try:
+        import openai  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
+def _has_azure_openai() -> bool:
+    required = (
+        "AZURE_OPENAI_API_KEY",
+        "AZURE_OPENAI_ENDPOINT",
+        "AZURE_OPENAI_API_VERSION",
+        "AZURE_OPENAI_DEPLOYMENT",
+    )
+    if not all(os.environ.get(k) for k in required):
+        return False
+    try:
+        import openai  # noqa: F401
+        return True
+    except Exception:
+        return False
+
+
 # -------------------------------------------------------------- data classes
 @dataclass
 class VerificationResult:
@@ -63,7 +90,7 @@ class VerificationResult:
     confidence: float          # 0..1
     label: str                 # "cell" / "debris" / "ambiguous"
     reasoning: str             # short explanation
-    backend: str               # "vllm" / "claude" / "heuristic"
+    backend: str               # "vllm" / "openai" / "azure-openai" / "claude" / "heuristic"
 
 
 # ----------------------------------------------------------------- helpers
@@ -97,13 +124,18 @@ class VisualLLMHelper:
 
     def __init__(self, prefer: str = "auto",
                  vllm_model: str = "Qwen/Qwen2-VL-7B-Instruct",
+                 openai_model: str = "gpt-4o-mini",
                  claude_model: str = "claude-opus-4-7"):
         """
-        prefer: "auto" | "vllm" | "claude" | "heuristic"
+        prefer: "auto" | "vllm" | "openai" | "azure-openai" | "claude" | "heuristic"
         """
         self.vllm_model = vllm_model
+        self.openai_model = os.environ.get("OPENAI_VISION_MODEL", openai_model)
+        self.azure_deployment = os.environ.get("AZURE_OPENAI_DEPLOYMENT", "")
         self.claude_model = claude_model
         self._vllm = None
+        self._openai = None
+        self._azure_openai = None
         self._anthropic = None
         self.backend = self._pick_backend(prefer)
 
@@ -113,11 +145,19 @@ class VisualLLMHelper:
             return "heuristic"
         if prefer == "vllm":
             return "vllm" if _has_vllm() else "heuristic"
+        if prefer == "openai":
+            return "openai" if _has_openai() else "heuristic"
+        if prefer == "azure-openai":
+            return "azure-openai" if _has_azure_openai() else "heuristic"
         if prefer == "claude":
             return "claude" if _has_anthropic() else "heuristic"
         # auto
         if _has_vllm():
             return "vllm"
+        if _has_azure_openai():
+            return "azure-openai"
+        if _has_openai():
+            return "openai"
         if _has_anthropic():
             return "claude"
         return "heuristic"
@@ -136,6 +176,18 @@ class VisualLLMHelper:
                 return self._vllm_verify(crop, context)
             except Exception as e:
                 return self._heuristic_verify(crop, reason=f"vllm-error: {e}")
+
+        if self.backend == "openai":
+            try:
+                return self._openai_verify(crop, context)
+            except Exception as e:
+                return self._heuristic_verify(crop, reason=f"openai-error: {e}")
+
+        if self.backend == "azure-openai":
+            try:
+                return self._azure_openai_verify(crop, context)
+            except Exception as e:
+                return self._heuristic_verify(crop, reason=f"azure-openai-error: {e}")
 
         if self.backend == "claude":
             try:
@@ -165,6 +217,24 @@ class VisualLLMHelper:
                 pass  # fall through to heuristic
 
         return self._heuristic_follow(prev, crops, candidate_bboxes, prev_bbox)
+
+    def backend_status(self) -> dict:
+        """Return configuration state without exposing secrets."""
+        return {
+            "selected_backend": self.backend,
+            "vllm_available": _has_vllm(),
+            "openai_available": _has_openai(),
+            "azure_openai_available": _has_azure_openai(),
+            "anthropic_available": _has_anthropic(),
+            "azure_missing": [
+                k for k in (
+                    "AZURE_OPENAI_ENDPOINT",
+                    "AZURE_OPENAI_API_VERSION",
+                    "AZURE_OPENAI_DEPLOYMENT",
+                )
+                if not os.environ.get(k)
+            ],
+        }
 
     # ================================================ heuristic backend
     @staticmethod
@@ -197,10 +267,16 @@ class VisualLLMHelper:
         area = float(cv2.contourArea(cnt))
         perim = float(cv2.arcLength(cnt, True))
         circularity = (4 * np.pi * area / (perim * perim)) if perim > 0 else 0.0
+        x, y, bw, bh = cv2.boundingRect(cnt)
+        aspect = max(bw, bh) / max(1, min(bw, bh))
+        elongated = 1.6 <= aspect <= 8.0
 
         # --- rules --------------------------------------------------------
         score = 0.0
         score += 0.35 if circularity > 0.55 else (0.15 if circularity > 0.35 else 0.0)
+        # Migrating melanoma / fibroblast-like cells are often spindle-shaped,
+        # so low circularity alone must not make them debris.
+        score += 0.25 if elongated else 0.0
         score += 0.25 if 0.12 < fg_fraction < 0.85 else 0.05
         score += 0.2 if std_int > 15 else 0.0
         score += 0.2 if area > 30 else 0.0
@@ -208,8 +284,9 @@ class VisualLLMHelper:
         score = float(np.clip(score, 0.0, 1.0))
         is_cell = score >= 0.55
         label = "cell" if is_cell else ("ambiguous" if score >= 0.35 else "debris")
-        explanation = (f"circ={circularity:.2f}, fg={fg_fraction:.2f}, "
-                       f"std={std_int:.1f}, area={area:.0f} — {reason}")
+        explanation = (f"circ={circularity:.2f}, aspect={aspect:.2f}, "
+                       f"fg={fg_fraction:.2f}, std={std_int:.1f}, "
+                       f"area={area:.0f} — {reason}")
         return VerificationResult(is_cell, score, label, explanation, "heuristic")
 
     @staticmethod
@@ -303,6 +380,75 @@ class VisualLLMHelper:
             return int(data.get("index", 0))
         except Exception:
             return 0
+
+    # ================================================= OpenAI backends
+    def _openai_prompt(self, context: Optional[str]) -> str:
+        return (
+            "You are a microscopy visual verifier. Inspect this crop from a "
+            "phase-contrast/DIC time-lapse of WM239A melanoma migration. "
+            "Classify whether the crop contains one real cell body center "
+            "rather than chamber wall, timestamp/scale bar, debris, or "
+            "background. Respond only as JSON with fields "
+            '{"label":"cell"|"debris"|"ambiguous","confidence":0..1,'
+            '"reason":"short"}. '
+            + (f"Context: {context}" if context else "")
+        )
+
+    def _ensure_openai(self):
+        if self._openai is not None:
+            return
+        from openai import OpenAI  # type: ignore
+        self._openai = OpenAI()
+
+    def _ensure_azure_openai(self):
+        if self._azure_openai is not None:
+            return
+        from openai import AzureOpenAI  # type: ignore
+        self._azure_openai = AzureOpenAI(
+            api_key=os.environ["AZURE_OPENAI_API_KEY"],
+            azure_endpoint=os.environ["AZURE_OPENAI_ENDPOINT"],
+            api_version=os.environ["AZURE_OPENAI_API_VERSION"],
+        )
+
+    def _openai_verify(self, crop: np.ndarray,
+                       context: Optional[str]) -> VerificationResult:
+        self._ensure_openai()
+        b64 = _encode_png_base64(crop)
+        resp = self._openai.chat.completions.create(
+            model=self.openai_model,
+            temperature=0,
+            max_tokens=180,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": self._openai_prompt(context)},
+                    {"type": "image_url",
+                     "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                ],
+            }],
+        )
+        text = resp.choices[0].message.content or ""
+        return self._parse_json_response(text, backend="openai")
+
+    def _azure_openai_verify(self, crop: np.ndarray,
+                             context: Optional[str]) -> VerificationResult:
+        self._ensure_azure_openai()
+        b64 = _encode_png_base64(crop)
+        resp = self._azure_openai.chat.completions.create(
+            model=self.azure_deployment,
+            temperature=0,
+            max_tokens=180,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": self._openai_prompt(context)},
+                    {"type": "image_url",
+                     "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                ],
+            }],
+        )
+        text = resp.choices[0].message.content or ""
+        return self._parse_json_response(text, backend="azure-openai")
 
     # ================================================= Claude backend
     def _ensure_anthropic(self):
