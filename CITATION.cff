@@ -1,0 +1,14 @@
+cff-version: 1.2.0
+message: "If you use CytoTrack AI or its result bundles in a paper, cite this software and the source datasets/models listed in each RESULT provenance file."
+title: "CytoTrack AI"
+version: "1.0"
+date-released: "2026-05-30"
+authors:
+  - name: "CytoTrack AI contributors"
+license: "MIT"
+keywords:
+  - cell tracking
+  - microscopy
+  - migration analysis
+  - image analysis
+  - bioimage informatics

@@ -10,22 +10,25 @@
    This will:
    - install required system packages (`python3-venv`, `libxcb-xinerama0`),
    - create a virtualenv at `./cell_track_venv`,
-   - install Python dependencies,
+   - install Python dependencies from `requirements.txt`,
    - register **CytoTrack AI** in the Applications menu,
    - drop a launcher on your Desktop (trusted automatically on GNOME).
 
 3. Launch from the Applications menu (search "CytoTrack AI") or
    double-click the desktop icon.
 
-> **Detection backend (NVIDIA LocateAnything-3B).** The installers also
-> install `requirements-locate.txt`, which enables the default
-> LocateAnything-3B detector. This is a ~3B-parameter model (GPU strongly
-> recommended) under the **NVIDIA non-commercial license** (academic /
-> non-profit research only). The model weights download on first use. If
-> the dependencies or weights are unavailable, the app automatically falls
-> back to the classical multi-strategy detector — nothing breaks. To skip
-> installing this backend, set `CYTOTRACK_SKIP_LOCATE=1` before running the
-> installer.
+> **Optional backend (NVIDIA LocateAnything-3B).** The installers can also
+> install `requirements-locate.txt`. This backend is not used by the default
+> research-paper result path because it is under the **NVIDIA non-commercial
+> license** (academic / non-profit research only). The default detector is
+> the open classical multi-strategy detector. To install this optional backend,
+> set `CYTOTRACK_INSTALL_LOCATE=1` before running the installer.
+
+Example:
+
+```bash
+CYTOTRACK_INSTALL_LOCATE=1 ./install_linux.sh
+```
 
 To remove the menu entry / desktop icon (but keep the project files):
 
@@ -44,6 +47,34 @@ To remove the menu entry / desktop icon (but keep the project files):
 3. The build creates `dist\CytoTrackAI\CytoTrackAI.exe` — a fully
    portable application. You can copy that folder anywhere and run
    `CytoTrackAI.exe` directly.
+
+For source setup, run `Setup_Windows.bat`, then `LaunchCellTracker.bat`.
+The optional NVIDIA backend is opt-in:
+
+```bat
+set CYTOTRACK_INSTALL_LOCATE=1
+Setup_Windows.bat
+```
+
+## Tracking Workflow
+
+1. Open **Track Cells**.
+2. Select a folder of microscopy frames.
+3. Enter the cell line or comma-separated cell lines.
+4. Choose pre-tracking morphology preparation:
+   - **Website QAgents**: licence-checked public resources, cached outside
+     `RESULT/`.
+   - **User Data**: a local folder with one class folder per requested cell
+     line.
+   - **Existing Model**: a trained folder containing `class_map.json`.
+   - **Single Line Label**: only for one declared cell line.
+5. Confirm brightness/contrast/gamma/filter settings.
+6. Run tracking.
+
+All paper-facing outputs go under `RESULT/` with videos, plots, dashboards,
+CSV metrics, manifests, and QC/provenance files. Keep
+`RESULT/RESEARCH_USE_PROVENANCE.md`, `LICENSE`, `NOTICE`, and `CITATION.cff`
+with any manuscript or supplementary result package.
 
 ### B. Build a proper .exe installer (optional, recommended)
 

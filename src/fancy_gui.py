@@ -547,9 +547,9 @@ class FancyGUI:
     def show_main_menu(self):
         menu = [
             ("Track Cells",         "Full migration-tracking pipeline"),
-            ("Train AI Classifier", "Transfer-learning on ViT / CNN"),
+            ("Train Cell Line",     "Research public cell-line data and train"),
+            ("Train AI Classifier", "Train from local labelled folders"),
             ("Analyze Existing Data", "Replot from CSV summaries"),
-            ("Generate Test Data",  "Synthetic image sequences"),
             ("Help & About",        "Workflow & version info"),
             ("Exit",                "Quit the application"),
         ]

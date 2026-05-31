@@ -1,26 +1,23 @@
-# Python
+# Python/runtime caches
 __pycache__/
 *.py[cod]
-*$py.class
-*.so
-.Python
-*.egg-info/
+.pytest_cache/
 
-# Virtual environments
+# Local environments
 cell_track_venv/
-venv/
-env/
 .venv/
+venv/
 
-# Tracking runtime outputs
-test_data/tracking_*/
-tracking_*/
+# Local inspection artifacts; paper-facing outputs belong in RESULT/
+local_test_outputs/
 
-# IDE / OS
-.vscode/
-.idea/
+# Generated model/training caches live outside RESULT by design
+model_cache/
+
+# Downloaded public source movies are not committed by default; result
+# bundles and provenance files record the source dataset.
+real_cell_movies/
+
+# OS/editor noise
 .DS_Store
 Thumbs.db
-
-# Claude local
-.claude/

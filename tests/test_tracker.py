@@ -66,6 +66,20 @@ def test_tracker_initialize_spawns_tracks():
     assert tr.active_count == 2
 
 
+def test_tracker_uses_detection_centroid_not_bbox_edge_center():
+    frame = np.zeros((120, 160, 3), dtype=np.uint8)
+    # Deliberately inconsistent bbox and centroid. This represents the
+    # architecture contract for mask-derived detections: tracking follows
+    # center_x/center_y, not the raw edge-derived bbox center.
+    det = Detection(0, 0, 20, 20, 70.0, 80.0, 400.0,
+                    center_source="mask_centroid")
+    tr = CellTracker()
+    tr.initialize(frame, [det])
+    track = next(iter(tr.tracks.values()))
+    x, y, w, h = track.boxes[-1]
+    assert (x + w / 2.0, y + h / 2.0) == (70.0, 80.0)
+
+
 def test_tracker_matches_moving_cell():
     frame = np.zeros((120, 160, 3), dtype=np.uint8)
     dets0 = [Detection(10, 10, 20, 20, 20, 20, 400.0)]

@@ -1,7 +1,9 @@
 # Optional dependencies for the NVIDIA LocateAnything-3B detection backend
-# (CellDetector sensitivity="locate"). This is the default detection model
-# for tracking; if these packages or the model weights are unavailable the
-# app automatically falls back to the classical multi-strategy detector.
+# (CellDetector sensitivity="locate"). This backend is optional and is not
+# used by the default research-paper result path because it carries a
+# non-commercial model license. If these packages or the model weights are
+# unavailable, the app automatically falls back to the open classical
+# multi-strategy detector.
 #
 # Notes:
 #   * Large model (~3B params). A CUDA GPU is strongly recommended; CPU
@@ -13,3 +15,7 @@ transformers==4.57.1
 peft
 decord
 lmdb
+# Optional prompt optimizer for LocateAnything cell queries. It is used only
+# when an LM API key is configured; otherwise the deterministic microscopy
+# prompt is used.
+dspy-ai

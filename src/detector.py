@@ -14,11 +14,15 @@ Strategies
 """
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
 
 import cv2
 import numpy as np
+
+from locate_prompt import (build_adaptive_locate_question, build_locate_question,
+                           deterministic_cell_query,
+                           optimize_cell_query_with_dspy)
 
 
 @dataclass
@@ -31,10 +35,33 @@ class Detection:
     center_y: float
     area: float
     confidence: float = 1.0
+    backend: str = "classical"
+    center_source: str = "mask_centroid"
+    qc_flags: List[str] = field(default_factory=list)
+    contour: Optional[np.ndarray] = None
 
     @property
     def bbox(self) -> Tuple[int, int, int, int]:
         return (self.x, self.y, self.w, self.h)
+
+    def centroid_aligned_bbox(self) -> Tuple[int, int, int, int]:
+        """
+        Return a bbox whose centre is the quantitative cell centre.
+
+        The tracker stores box histories for compatibility with the existing
+        analyzer/visualizer, but assignment must follow the cell centre from
+        the segmentation mask or detector centroid, not a contour edge.
+        """
+        return (
+            int(round(self.center_x - self.w / 2.0)),
+            int(round(self.center_y - self.h / 2.0)),
+            int(self.w),
+            int(self.h),
+        )
+
+    @property
+    def has_border(self) -> bool:
+        return self.contour is not None and len(self.contour) >= 3
 
 
 def _contour_to_det(cnt, min_area: float, max_area: float,
@@ -56,7 +83,9 @@ def _contour_to_det(cnt, min_area: float, max_area: float,
         cx, cy = x + w / 2.0, y + h / 2.0
     return Detection(x=int(x), y=int(y), w=int(w), h=int(h),
                      center_x=float(cx), center_y=float(cy),
-                     area=float(area), confidence=confidence)
+                     area=float(area), confidence=confidence,
+                     backend="classical", center_source="contour_moment",
+                     contour=np.asarray(cnt, dtype=np.int32).copy())
 
 
 def _bbox_iou(a: Tuple[int, int, int, int], b: Tuple[int, int, int, int]) -> float:
@@ -119,6 +148,7 @@ class CellDetector:
                  sensitivity: str = "normal",
                  locate_model_path: str = "nvidia/LocateAnything-3B",
                  locate_query: str = "cell",
+                 locate_use_dspy_prompt: bool = True,
                  locate_generation_mode: str = "hybrid",
                  locate_max_new_tokens: int = 4096):
         self.min_area = min_area
@@ -149,6 +179,9 @@ class CellDetector:
         # Lazy-loaded NVIDIA LocateAnything-3B (only when sensitivity="locate").
         self.locate_model_path = str(locate_model_path)
         self.locate_query = str(locate_query)
+        self.locate_use_dspy_prompt = bool(locate_use_dspy_prompt)
+        self._locate_prompt_query = None
+        self._locate_prompt_method = None
         self.locate_generation_mode = str(locate_generation_mode)
         self.locate_max_new_tokens = int(locate_max_new_tokens)
         self._locate_model = None
@@ -183,7 +216,11 @@ class CellDetector:
         # Tune size bounds around the measured median.
         self.expected_max_diameter = int(max(20, med_d * 1.4))
         self.min_area = int(max(8, med_a * self._min_area_factor))
-        self.max_area = int(max(self.min_area * 4, med_a * 4.0))
+        # In high-recall modes, do not shrink the caller's max_area during
+        # calibration. Touching cells first appear as one oversized contour;
+        # it must survive the area gate so _split_merged() can separate it.
+        max_area_floor = self.max_area if self.sensitivity in ("high", "max") else 0
+        self.max_area = int(max(max_area_floor, self.min_area * 4, med_a * 4.0))
         self._calibrated = True
         return {
             "n": len(raw),
@@ -325,6 +362,8 @@ class CellDetector:
                 w=2 * r, h=2 * r,
                 center_x=float(x), center_y=float(y),
                 area=float(np.pi * r * r), confidence=0.75,
+                backend="classical_blob", center_source="blob_center",
+                qc_flags=["approximate_circle_border"],
             ))
         return detections
 
@@ -350,6 +389,8 @@ class CellDetector:
                 w=2 * r, h=2 * r,
                 center_x=float(x), center_y=float(y),
                 area=area, confidence=0.7,
+                backend="classical_hough", center_source="circle_center",
+                qc_flags=["approximate_circle_border"],
             ))
         return detections
 
@@ -418,6 +459,11 @@ class CellDetector:
                                           self.max_area, 0.9)
                     if sub is None:
                         continue
+                    contour = None
+                    if sub.contour is not None:
+                        contour = sub.contour.copy()
+                        contour[:, 0, 0] += x0
+                        contour[:, 0, 1] += y0
                     # Shift ROI-local coords back to full-image coords
                     splits.append(Detection(
                         x=sub.x + x0, y=sub.y + y0,
@@ -425,6 +471,9 @@ class CellDetector:
                         center_x=sub.center_x + x0,
                         center_y=sub.center_y + y0,
                         area=sub.area, confidence=0.95,
+                        backend="classical_watershed_split",
+                        center_source=sub.center_source,
+                        contour=contour,
                     ))
 
             if len(splits) >= 2:
@@ -506,6 +555,9 @@ class CellDetector:
                 x=int(x), y=int(y), w=int(w), h=int(h),
                 center_x=float(cx), center_y=float(cy),
                 area=area, confidence=0.99,
+                backend="cellpose-sam",
+                center_source="mask_centroid",
+                contour=np.asarray(cnt, dtype=np.int32).copy(),
             ))
         return detections
 
@@ -575,8 +627,8 @@ class CellDetector:
             pil = Image.fromarray(rgb)
             W, H = pil.size
 
-            question = ("Locate all the instances that matches the following "
-                        f"description: {self.locate_query}.")
+            question = build_adaptive_locate_question(
+                self._get_locate_prompt_query(), image)
             messages = [{"role": "user", "content": [
                 {"type": "image", "image": pil},
                 {"type": "text", "text": question},
@@ -628,8 +680,35 @@ class CellDetector:
                 x=x, y=y, w=w, h=h,
                 center_x=px1 + w / 2.0, center_y=py1 + h / 2.0,
                 area=float(w * h), confidence=0.9,
+                backend="locateanything",
+                center_source="box_center_prompted_centroid",
+                qc_flags=["box_only_no_cell_border"],
             ))
         return detections
+
+    def _get_locate_prompt_query(self) -> str:
+        """Resolve the LocateAnything visual query once per detector."""
+        if self._locate_prompt_query is not None:
+            return self._locate_prompt_query
+
+        if self.locate_use_dspy_prompt:
+            result = optimize_cell_query_with_dspy(
+                self.locate_query,
+                context=(
+                    "Time-lapse microscopy cell-tracking frames. The detector "
+                    "must return one box per individual visible cell so the "
+                    "Kalman/Hungarian tracker can analyze motion."
+                ),
+            )
+            self._locate_prompt_query = result.query
+            self._locate_prompt_method = result.method
+        else:
+            self._locate_prompt_query = deterministic_cell_query(self.locate_query)
+            self._locate_prompt_method = "deterministic"
+
+        print(f"[detector] LocateAnything prompt={self._locate_prompt_method}: "
+              f"{self._locate_prompt_query}")
+        return self._locate_prompt_query
 
     # ----------------------------------------- per-cell feature extraction
     # Feature dimensionality of Cellpose-SAM's `styles` bottleneck.

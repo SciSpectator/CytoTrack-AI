@@ -1,0 +1,5 @@
+folder,unique_gt_labels,selected_track_ids,missing_unique_labels,mean_labels_present_per_frame,mean_labels_tracked_per_frame,max_missing_per_frame,frames_with_missing,coverage_audit
+DIC-C2DH-HeLa_01_all_cells,38,38,0,13.333333333333334,13.333333333333334,0,0,DIC-C2DH-HeLa_01_all_cells/all_cell_coverage_audit.csv
+DIC-C2DH-HeLa_02_all_cells,32,32,0,12.261904761904763,12.261904761904763,0,0,DIC-C2DH-HeLa_02_all_cells/all_cell_coverage_audit.csv
+Fluo-C2DL-Huh7_01_all_cells,34,34,0,31.7,31.7,0,0,Fluo-C2DL-Huh7_01_all_cells/all_cell_coverage_audit.csv
+Fluo-C2DL-Huh7_02_all_cells,69,69,0,53.93333333333333,53.93333333333333,0,0,Fluo-C2DL-Huh7_02_all_cells/all_cell_coverage_audit.csv

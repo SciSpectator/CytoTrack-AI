@@ -196,6 +196,25 @@ _DEFAULT_CATALOG: List[Dataset] = [
                     "class.",
         approx_image_count=32,
     ),
+    Dataset(
+        id="BBBC019",
+        name="Collective cell migration wound-healing assay",
+        organism="Human",
+        phenotype="migrating epithelial cells",
+        keywords=["brightfield", "phase", "migration", "wound", "scratch",
+                  "label-free", "light microscopy"],
+        licence="CC-BY-3.0",
+        attribution="Broad Bioimage Benchmark Collection / collective cell migration",
+        homepage="https://bbbc.broadinstitute.org/BBBC019",
+        download_url=(
+            "https://data.broadinstitute.org/bbbc/BBBC019/"
+            "BBBC019_v2_images.zip"
+        ),
+        description="Brightfield/label-free wound-healing migration assay. "
+                    "Useful when the tracking movie is light microscopy "
+                    "rather than fluorescence.",
+        approx_image_count=200,
+    ),
 ]
 
 

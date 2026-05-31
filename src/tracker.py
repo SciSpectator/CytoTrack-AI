@@ -44,6 +44,28 @@ def _bbox_iou(a: Tuple[int, int, int, int], b: Tuple[int, int, int, int]) -> flo
     return inter / union if union > 0 else 0.0
 
 
+def _det_to_centroid_box(det) -> Tuple[int, int, int, int]:
+    """
+    Convert a detector object or bbox tuple into the tracker's box format.
+
+    If the detector provides ``center_x``/``center_y`` those coordinates are
+    treated as the quantitative cell centre. This keeps tracking on mask
+    centroids instead of drifting to contour edges or arbitrary bbox centres.
+    """
+    box = det.bbox if hasattr(det, "bbox") else det
+    x, y, w, h = tuple(int(v) for v in box)
+    if hasattr(det, "center_x") and hasattr(det, "center_y"):
+        cx = float(det.center_x)
+        cy = float(det.center_y)
+        return (
+            int(round(cx - w / 2.0)),
+            int(round(cy - h / 2.0)),
+            int(w),
+            int(h),
+        )
+    return (x, y, w, h)
+
+
 # --- Appearance-consistency helpers ------------------------------------
 # A small zero-mean unit-variance grayscale thumbnail per detection is
 # enough to resolve ID swaps during overlap. Dot-product of two such
@@ -162,6 +184,7 @@ class Track:
     cell_type: str = "Cell"
     color: Tuple[int, int, int] = (0, 255, 0)
     boxes: List[Tuple[int, int, int, int]] = field(default_factory=list)
+    birth_frame: int = 0
     is_active: bool = True
     missed_frames: int = 0
     hits: int = 1
@@ -235,15 +258,19 @@ class CellTracker:
     ]
 
     def __init__(self, max_missed: int = 15, iou_threshold: float = 0.1,
-                 max_distance: float = 80.0):
+                 max_distance: float = 80.0,
+                 suppress_duplicate_detections: bool = False):
         self.max_missed = max_missed
         self.iou_threshold = iou_threshold
         self.max_distance = max_distance
+        self.suppress_duplicate_detections = bool(suppress_duplicate_detections)
         self.tracks: Dict[int, Track] = {}
         self._next_id = 0
         self._width = 0
         self._height = 0
         self._detector = None
+        self._frame_idx = 0
+        self._expected_active_cap = 0
 
     @property
     def active_count(self) -> int:
@@ -285,6 +312,22 @@ class CellTracker:
             return True
         return False
 
+    @staticmethod
+    def _snapshot_kf(track: "Track") -> Optional[Tuple[np.ndarray, np.ndarray]]:
+        if track._kf is None:
+            return None
+        return track._kf.x.copy(), track._kf.P.copy()
+
+    @staticmethod
+    def _restore_kf(
+        track: "Track",
+        snapshot: Optional[Tuple[np.ndarray, np.ndarray]],
+    ) -> None:
+        if snapshot is None or track._kf is None:
+            return
+        track._kf.x = snapshot[0]
+        track._kf.P = snapshot[1]
+
     def calibrate(self, detections) -> dict:
         """
         Tune Hungarian cost cutoffs from the observed cell-size distribution.
@@ -312,23 +355,35 @@ class CellTracker:
         self._height, self._width = frame.shape[:2]
         self.tracks.clear()
         self._next_id = 0
+        self._frame_idx = 0
 
+        det_boxes: List[Tuple[int, int, int, int]] = []
+        det_appearance: List[Optional[np.ndarray]] = []
         for det in detections:
-            box = det.bbox if hasattr(det, "bbox") else det
-            bbox = tuple(int(v) for v in box)
-            appearance = _extract_appearance(frame, bbox)
-            self._spawn_track(bbox, appearance=appearance)
+            bbox = _det_to_centroid_box(det)
+            det_boxes.append(bbox)
+            det_appearance.append(_extract_appearance(frame, bbox))
+
+        if self.suppress_duplicate_detections:
+            det_boxes, det_appearance = self._dedupe_detections(
+                det_boxes, det_appearance)
+        for bbox, appearance in zip(det_boxes, det_appearance):
+            self._spawn_track(bbox, appearance=appearance,
+                              birth_frame=self._frame_idx)
+        self._expected_active_cap = len(self.tracks)
 
         print(f"  Initialized {len(self.tracks)} tracks")
 
     def _spawn_track(self, bbox: Tuple[int, int, int, int],
-                     appearance: Optional[np.ndarray] = None) -> int:
+                     appearance: Optional[np.ndarray] = None,
+                     birth_frame: Optional[int] = None) -> int:
         tid = self._next_id
         area = float(max(1, bbox[2]) * max(1, bbox[3]))
         track = Track(
             track_id=tid,
             color=self.COLORS[tid % len(self.COLORS)],
             boxes=[bbox],
+            birth_frame=self._frame_idx if birth_frame is None else birth_frame,
             _kf=KalmanBox(bbox),
             area_ema=area,
             w_ema=float(max(1, bbox[2])),
@@ -339,6 +394,64 @@ class CellTracker:
         self.tracks[tid] = track
         self._next_id += 1
         return tid
+
+    def _dedupe_detections(
+        self,
+        det_boxes: List[Tuple[int, int, int, int]],
+        det_appearance: List[Optional[np.ndarray]],
+    ) -> Tuple[List[Tuple[int, int, int, int]], List[Optional[np.ndarray]]]:
+        """
+        Suppress duplicate boxes before they can create duplicate tracks.
+
+        High-recall detector fusion often emits several boxes for the same
+        cell. We only merge boxes that are nearly co-centered or one clearly
+        contains the other; adjacent cells with separated centres survive.
+        """
+        if len(det_boxes) <= 1:
+            return det_boxes, det_appearance
+
+        order = sorted(
+            range(len(det_boxes)),
+            key=lambda i: det_boxes[i][2] * det_boxes[i][3],
+        )
+        keep: List[int] = []
+        for idx in order:
+            box = det_boxes[idx]
+            cx = box[0] + box[2] / 2.0
+            cy = box[1] + box[3] / 2.0
+            area = max(1.0, float(box[2] * box[3]))
+            duplicate = False
+            for kept_idx in keep:
+                other = det_boxes[kept_idx]
+                ox = other[0] + other[2] / 2.0
+                oy = other[1] + other[3] / 2.0
+                other_area = max(1.0, float(other[2] * other[3]))
+                iou = _bbox_iou(box, other)
+                dist = float(np.hypot(cx - ox, cy - oy))
+                min_dim = max(1.0, min(box[2], box[3], other[2], other[3]))
+                area_ratio = max(area, other_area) / max(1.0, min(area, other_area))
+
+                if iou > 0.60 and dist < min_dim * 0.35:
+                    duplicate = True
+                    break
+
+                # Containment-like duplicates: a loose detector box around the
+                # same centre plus a tighter contour/blob box.
+                inter_x1 = max(box[0], other[0])
+                inter_y1 = max(box[1], other[1])
+                inter_x2 = min(box[0] + box[2], other[0] + other[2])
+                inter_y2 = min(box[1] + box[3], other[1] + other[3])
+                inter = max(0, inter_x2 - inter_x1) * max(0, inter_y2 - inter_y1)
+                contained = inter / min(area, other_area) > 0.78
+                if contained and dist < min_dim * 0.42 and area_ratio < 3.2:
+                    duplicate = True
+                    break
+
+            if not duplicate:
+                keep.append(idx)
+
+        keep = sorted(keep)
+        return [det_boxes[i] for i in keep], [det_appearance[i] for i in keep]
 
     def _cost_matrix(
         self,
@@ -427,14 +540,14 @@ class CellTracker:
         attached and no detections provided, Kalman predictions are used
         as best-effort updates.
         """
+        self._frame_idx += 1
         if detections is None and self._detector is not None:
             detections = self._detector.detect(frame)
 
         det_boxes: List[Tuple[int, int, int, int]] = []
         if detections is not None:
             for d in detections:
-                box = d.bbox if hasattr(d, "bbox") else d
-                det_boxes.append(tuple(int(v) for v in box))
+                det_boxes.append(_det_to_centroid_box(d))
 
         # Kalman predict for every active track
         active_items = [(tid, t) for tid, t in self.tracks.items() if t.is_active]
@@ -444,6 +557,9 @@ class CellTracker:
         det_appearance: List[Optional[np.ndarray]] = [
             _extract_appearance(frame, b) for b in det_boxes
         ]
+        if self.suppress_duplicate_detections:
+            det_boxes, det_appearance = self._dedupe_detections(
+                det_boxes, det_appearance)
 
         matched_track_ids: set = set()
         matched_det_idx: set = set()
@@ -491,15 +607,16 @@ class CellTracker:
 
                 tid, _ = predicted[r]
                 track = self.tracks[tid]
+                kf_before = self._snapshot_kf(track)
                 track._kf.update(det_boxes[c])
                 new_box = track._kf.bbox()
                 if self._is_anomalous_step(track, new_box):
                     # Match would teleport the track — refuse it and let
                     # the track coast (velocity clamp below stops runaway).
+                    self._restore_kf(track, kf_before)
                     track.missed_frames += 1
                     if track.missed_frames > self.max_missed:
                         track.is_active = False
-                    matched_det_idx.add(c)
                     continue
                 track.boxes.append(new_box)
                 track.missed_frames = 0
@@ -530,14 +647,15 @@ class CellTracker:
             recovered_idx = self._last_chance_match(
                 t, pred_box, det_boxes, det_appearance, matched_det_idx)
             if recovered_idx is not None:
+                kf_before = self._snapshot_kf(t)
                 t._kf.update(det_boxes[recovered_idx])
                 new_box = t._kf.bbox()
                 if self._is_anomalous_step(t, new_box):
                     # Refuse the recovery — too far to be the same cell.
+                    self._restore_kf(t, kf_before)
                     t.missed_frames += 1
                     if t.missed_frames > self.max_missed:
                         t.is_active = False
-                    matched_det_idx.add(recovered_idx)
                     continue
                 t.boxes.append(new_box)
                 t.missed_frames = 0
@@ -586,6 +704,22 @@ class CellTracker:
         for j, det_box in enumerate(det_boxes):
             if j in matched_det_idx:
                 continue
+            # Check active tracks first. A duplicate box should never revive a
+            # retired duplicate ID or spawn a new one while an active track
+            # already represents that cell.
+            if self._absorb_into_matched(
+                    det_box, matched_track_ids):
+                matched_det_idx.add(j)
+                continue
+            if (self.suppress_duplicate_detections
+                    and self._absorb_into_any_active(det_box, det_appearance[j])):
+                matched_det_idx.add(j)
+                continue
+            if (self.suppress_duplicate_detections
+                    and self.active_count >= self._active_cap()):
+                matched_det_idx.add(j)
+                continue
+
             revived_tid = self._try_revive_inactive(
                 det_box, det_appearance[j])
             if revived_tid is not None:
@@ -613,27 +747,14 @@ class CellTracker:
                 t._kf.x[4] = 0.0
                 t._kf.x[5] = 0.0
                 new_box = t._kf.bbox()
-                if t.boxes:
-                    t.boxes[-1] = new_box
-                else:
-                    t.boxes.append(new_box)
+                t.boxes.append(new_box)
                 area = float(max(1, det_box[2]) * max(1, det_box[3]))
                 t.update_appearance(det_appearance[j], area)
                 t.update_display_size(det_box[2], det_box[3])
                 matched_det_idx.add(j)
                 continue
-            # Anti-fragmentation: if this unmatched detection overlaps an
-            # ALREADY-matched active track (two detector strategies fired
-            # on the same cell, one got Hungarian-matched, the other
-            # slipped through), don't spawn a duplicate — absorb silently.
-            # Without this guard, relaxing detector NMS to improve recall
-            # in dense fields reliably created pairs of tracks that then
-            # ID-swap frame to frame.
-            if self._absorb_into_matched(
-                    det_box, matched_track_ids):
-                matched_det_idx.add(j)
-                continue
-            self._spawn_track(det_box, appearance=det_appearance[j])
+            self._spawn_track(det_box, appearance=det_appearance[j],
+                              birth_frame=self._frame_idx)
 
         # Post-Hungarian track merger: collapse pairs of active tracks
         # that now sit on the same cell. Relaxed detection recall can
@@ -643,10 +764,85 @@ class CellTracker:
         # Merging them here removes ping-pong id switches without
         # regressing the clean-scene tests, because the gate is strict.
         self._merge_duplicate_tracks()
+        if self.suppress_duplicate_detections:
+            self._prune_excess_active_tracks(det_boxes)
 
         # Build outputs for currently active tracks
         return {tid: t.boxes[-1] for tid, t in self.tracks.items()
                 if t.is_active and t.boxes}
+
+    def _prune_excess_active_tracks(
+        self,
+        det_boxes: List[Tuple[int, int, int, int]],
+    ) -> None:
+        """
+        In high-recall mode, remove duplicate/coasting IDs instead of letting
+        them accumulate as active or lost tracks.
+
+        This is intentionally opt-in because ordinary videos may have cells
+        entering the field. Locate/high-recall synthetic runs are closed-world
+        enough that active IDs far above the initialized population are almost
+        always duplicate detector boxes.
+        """
+        active = [(tid, t) for tid, t in self.tracks.items()
+                  if t.is_active and t.boxes]
+        if not active:
+            return
+        cap = self._active_cap()
+        self._drop_inactive_over_cap(cap)
+        if len(active) <= cap:
+            return
+
+        def distance_to_detection(track: Track) -> float:
+            if not det_boxes:
+                return float("inf")
+            box = track.boxes[-1]
+            cx = box[0] + box[2] / 2.0
+            cy = box[1] + box[3] / 2.0
+            return float(min(
+                np.hypot(cx - (d[0] + d[2] / 2.0),
+                         cy - (d[1] + d[3] / 2.0))
+                for d in det_boxes
+            ))
+
+        candidates = []
+        for tid, t in active:
+            age = self._frame_idx - t.birth_frame + 1
+            det_dist = distance_to_detection(t)
+            candidates.append((
+                # Only delete very fresh duplicate spawns. Established tracks
+                # keep their history; extra detections are absorbed instead.
+                1 if t.birth_frame == self._frame_idx and t.hits <= 1 else 0,
+                1 if t.missed_frames > 0 else 0,
+                det_dist,
+                -t.hits,
+                -age,
+                tid,
+            ))
+        candidates.sort(reverse=True)
+        remove_n = len(active) - cap
+        removed = 0
+        for fresh, *_rest, tid in candidates:
+            if removed >= remove_n:
+                break
+            if fresh <= 0:
+                break
+            self.tracks.pop(tid, None)
+            removed += 1
+
+        self._drop_inactive_over_cap(cap)
+
+    def _drop_inactive_over_cap(self, cap: int) -> None:
+        inactive = [(tid, t) for tid, t in self.tracks.items()
+                    if not t.is_active]
+        if inactive and len(self.tracks) > cap:
+            inactive.sort(key=lambda item: (
+                item[1].hits,
+                item[1].frame_count,
+                item[1].birth_frame,
+            ))
+            for tid, _ in inactive[:max(0, len(self.tracks) - cap)]:
+                self.tracks.pop(tid, None)
 
     def _merge_duplicate_tracks(self) -> None:
         """
@@ -671,20 +867,18 @@ class CellTracker:
         if len(actives) < 2:
             return
 
+        to_delete: set = set()
         to_retire: set = set()
         for i in range(len(actives)):
             tid_a, ta = actives[i]
-            if tid_a in to_retire:
+            if tid_a in to_retire or tid_a in to_delete:
                 continue
             bx_a = ta.boxes[-1]
             cx_a = bx_a[0] + bx_a[2] / 2.0
             cy_a = bx_a[1] + bx_a[3] / 2.0
             for j in range(i + 1, len(actives)):
                 tid_b, tb = actives[j]
-                if tid_b in to_retire:
-                    continue
-                # Only merge if at least one side is freshly-spawned.
-                if ta.hits >= 3 and tb.hits >= 3:
+                if tid_b in to_retire or tid_b in to_delete:
                     continue
                 bx_b = tb.boxes[-1]
                 cx_b = bx_b[0] + bx_b[2] / 2.0
@@ -692,16 +886,37 @@ class CellTracker:
                 min_dim = min(bx_a[2], bx_a[3], bx_b[2], bx_b[3])
                 if min_dim <= 0:
                     continue
-                if np.hypot(cx_a - cx_b, cy_a - cy_b) >= min_dim * 0.2:
+                dist = float(np.hypot(cx_a - cx_b, cy_a - cy_b))
+                dist_thr = 0.45 if self.suppress_duplicate_detections else 0.2
+                if dist >= min_dim * dist_thr:
                     continue
-                if _bbox_iou(bx_a, bx_b) <= 0.8:
+                iou = _bbox_iou(bx_a, bx_b)
+                iou_thr = 0.50 if self.suppress_duplicate_detections else 0.8
+                if iou <= iou_thr:
+                    continue
+                app = _appearance_distance(ta.appearance, tb.appearance)
+                if self.suppress_duplicate_detections:
+                    fresh_pair = ta.hits < 5 or tb.hits < 5
+                    similar_pair = app < 0.28 and abs(ta.hits - tb.hits) >= 2
+                    if not (fresh_pair or similar_pair):
+                        continue
+                elif ta.hits >= 3 and tb.hits >= 3:
                     continue
                 # Retire the younger (fewer hits) one; higher id on tie.
                 if ta.hits > tb.hits or (ta.hits == tb.hits and tid_a < tid_b):
-                    to_retire.add(tid_b)
+                    loser = tid_b
                 else:
-                    to_retire.add(tid_a)
+                    loser = tid_a
+                loser_track = self.tracks.get(loser)
+                if (self.suppress_duplicate_detections
+                        and loser_track is not None and loser_track.hits < 5):
+                    to_delete.add(loser)
+                else:
+                    to_retire.add(loser)
+                if loser == tid_a:
                     break
+        for tid in to_delete:
+            self.tracks.pop(tid, None)
         for tid in to_retire:
             t = self.tracks.get(tid)
             if t is not None:
@@ -749,7 +964,7 @@ class CellTracker:
         would-be duplicate spawn.
 
         Gate: IoU > 0.65 with the matched track's post-update bbox, OR
-        the detection centre within ~0.35 of the radius of that track's
+        the detection centre within ~0.55 of the radius of that track's
         centre AND the two bboxes overlap at all. Both are very strict so
         real new cells (unseen this frame) still spawn new ids.
         """
@@ -765,10 +980,59 @@ class CellTracker:
             bx = b[0] + b[2] / 2.0
             by = b[1] + b[3] / 2.0
             rad = min(b[2], b[3], det_box[2], det_box[3]) / 2.0
-            if (_bbox_iou(det_box, b) > 0.1
-                    and np.hypot(dx - bx, dy - by) < rad * 0.35):
+            if (_bbox_iou(det_box, b) > 0.08
+                    and np.hypot(dx - bx, dy - by) < rad * 0.55):
                 return True
         return False
+
+    def _absorb_into_any_active(
+        self,
+        det_box: Tuple[int, int, int, int],
+        det_app: Optional[np.ndarray],
+    ) -> bool:
+        """
+        Suppress duplicate spawns from high-recall detectors.
+
+        Unlike _absorb_into_matched(), this scans every active track. It is
+        intentionally stricter on overlap/appearance because it runs before
+        creating a new biological object ID.
+        """
+        dx = det_box[0] + det_box[2] / 2.0
+        dy = det_box[1] + det_box[3] / 2.0
+        d_area = float(max(1, det_box[2]) * max(1, det_box[3]))
+        for t in self.tracks.values():
+            if not t.is_active or not t.boxes:
+                continue
+            b = t.boxes[-1]
+            iou = _bbox_iou(det_box, b)
+            if iou > 0.45:
+                return True
+
+            bx = b[0] + b[2] / 2.0
+            by = b[1] + b[3] / 2.0
+            dist = float(np.hypot(dx - bx, dy - by))
+            rad = min(b[2], b[3], det_box[2], det_box[3]) / 2.0
+            if rad <= 0:
+                continue
+            if iou <= 0.12 or dist >= rad * 0.42:
+                continue
+
+            # If appearance is available and clearly different, allow a
+            # genuine adjacent cell to spawn. Otherwise treat the detection as
+            # the same cell seen by another detector strategy.
+            app = _appearance_distance(t.appearance, det_app)
+            if t.appearance is not None and det_app is not None and app > 0.42:
+                continue
+            if t.area_ema > 0:
+                ratio = max(d_area, t.area_ema) / max(1e-6, min(d_area, t.area_ema))
+                if ratio > 2.5:
+                    continue
+            return True
+        return False
+
+    def _active_cap(self) -> int:
+        base_cap = self._expected_active_cap or max(1, self.active_count)
+        return max(base_cap + 3, int(round(base_cap * 1.10)))
 
     def _try_revive_inactive(
         self,

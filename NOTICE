@@ -1,0 +1,44 @@
+CytoTrack AI research-use notice
+================================
+
+CytoTrack AI source code is released under the MIT License. Research outputs
+should cite this software and every source dataset/model listed in the result
+folder provenance.
+
+Default result path
+-------------------
+
+The default detector/tracking path uses the local classical multi-strategy
+detector, centroid-based tracking, self-repair quality checks, and locally
+generated plots/dashboards. This path avoids optional non-commercial model
+backends.
+
+Optional components with extra restrictions
+-------------------------------------------
+
+NVIDIA LocateAnything-3B is optional and opt-in. It is not installed by default
+and is not used by the default research-paper result path. If a run uses it,
+the run manifest must say so and the user must comply with the NVIDIA model
+license.
+
+LIVECell images/annotations are not redistributed by this repository. If a
+user separately trains with LIVECell, the resulting paper must cite LIVECell
+and respect the LIVECell CC BY-NC 4.0 data/model license.
+
+PyQt5 is an open-source GPL/commercial Qt binding. Source-code use in this
+repository remains MIT, but distributing a binary that includes PyQt5 requires
+GPL-compliant distribution or a commercial PyQt license. For simplest binary
+redistribution under permissive terms, migrate the GUI binding to an LGPL Qt
+binding such as PySide6 or use the non-Qt result-generation scripts.
+
+Result bundle rule
+------------------
+
+Every paper-facing result folder should contain:
+
+- videos or dashboard media used for inspection,
+- CSV tables for tracks and migration measurements,
+- plots and interactive dashboards,
+- manifest/provenance with software version, detector backend, source movie,
+  training inputs, dataset licenses, and citation obligations,
+- QC/audit files showing coverage and identity checks.

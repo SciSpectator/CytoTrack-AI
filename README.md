@@ -13,16 +13,16 @@
   <img alt="version" src="https://img.shields.io/badge/version-1.0-1E90E0?style=flat-square">
   <img alt="python" src="https://img.shields.io/badge/python-3.10%2B-2E7D32?style=flat-square">
   <img alt="platform" src="https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20macOS-4CAF50?style=flat-square">
-  <img alt="license" src="https://img.shields.io/badge/license-open--source-1E90E0?style=flat-square">
+  <img alt="license" src="https://img.shields.io/badge/license-MIT-1E90E0?style=flat-square">
 </p>
 
 ---
 
 ## What is CytoTrack AI?
 
-CytoTrack AI is a desktop application for **quantitative cell migration analysis** on time-lapse microscopy image sequences. It detects every cell in every frame, tracks them across frames with a modern SORT-style tracker (Kalman filter + Hungarian assignment), and produces migration metrics, trajectory plots, and publication-ready CSV summaries.
+CytoTrack AI is a desktop application for **quantitative cell migration analysis** on time-lapse microscopy image sequences. It detects cell borders, tracks the **cell center/centroid** across frames with a modern SORT-style tracker (Kalman filter + Hungarian assignment), and produces migration metrics, trajectory plots, dashboards, videos, and publication-ready CSV summaries.
 
-On top of the migration pipeline, CytoTrack AI can **train per-phenotype classifiers**: either from your own labelled image folders, or by searching a curated catalogue of open-licensed cell image datasets (BBBC, Cell Image Library, HPA). Once trained, the classifier is used during tracking to auto-label every cell with its phenotype.
+Before tracking starts, the user must specify the cell line or cell lines. CytoTrack AI can then prepare a morphology classifier from website QAgents that search licence-checked public resources, from user-provided labelled folders, or from an existing trained model. Single-cell-line runs may also use one declared label for all tracks.
 
 The whole interface is a native PyQt5 window with a Frutiger-Aero-inspired theme — no notebook, no browser, no server.
 
@@ -61,6 +61,10 @@ LaunchCellTracker.bat
 
 `Setup_Windows.bat` creates a local `cell_track_venv\`, installs everything from `requirements.txt`, and leaves the tree ready for `LaunchCellTracker.bat`.
 
+To install the optional NVIDIA LocateAnything backend, run setup with
+`CYTOTRACK_INSTALL_LOCATE=1`. It is not installed by default because it is
+under a non-commercial model license.
+
 ### Ubuntu / Linux — one-command install
 
 ```bash
@@ -75,6 +79,15 @@ Minimal source-only setup (no desktop integration):
 ./setup.sh
 ./launch.sh
 ```
+
+To install the optional NVIDIA LocateAnything backend on Linux, run:
+
+```bash
+CYTOTRACK_INSTALL_LOCATE=1 ./install_linux.sh
+```
+
+The default install remains open-source/research-paper clean and uses the
+local classical detector path.
 
 ### macOS — source
 
@@ -95,8 +108,9 @@ A signed `.app` / `.dmg` is not currently provided.
 graph TB
     subgraph GUI["Desktop GUI (PyQt5 · Frutiger Aero)"]
         MainMenu[Main Menu]
+        CellLineGate[Cell-line selection]
+        PreTrain[Pre-tracking morphology training]
         SettingsPreview[Image Settings Preview]
-        ManualClassify[Manual Classification]
     end
 
     subgraph Core["Detection + Tracking Pipeline"]
@@ -122,7 +136,9 @@ graph TB
         HW["HardwareProfile<br/>(VRAM / CPU tier · latency knobs)"]
     end
 
-    MainMenu --> Detector
+    MainMenu --> CellLineGate
+    CellLineGate --> PreTrain
+    PreTrain --> Detector
     Detector --> DebrisReasoner
     DebrisReasoner --> Tracker
     Tracker --> Recovery
@@ -152,9 +168,10 @@ Key design points:
 flowchart LR
     A[Launch CytoTrack AI] --> B{Main menu}
     B -->|Track Cells| C[Select image folder]
-    C --> D[Classification mode]
-    D --> E[Adjust brightness / contrast /<br/>gamma / filter — live preview]
-    E --> F[Tracking loop<br/>detect · track · classify · recover]
+    C --> D[Specify cell line or cell lines]
+    D --> E[Train from website QAgents,<br/>user data, or existing model]
+    E --> P[Adjust brightness / contrast /<br/>gamma / filter — live preview]
+    P --> F[Tracking loop<br/>detect borders · track centroids ·<br/>classify · recover]
     F --> G[Migration analysis<br/>CSV + plots + video]
 
     B -->|Train Phenotype Local| H[Point at class folders]
@@ -170,14 +187,14 @@ flowchart LR
     B -->|Analyze Results| O[Re-plot an existing CSV]
 ```
 
-### Classification modes inside **Track Cells**
+### Pre-tracking choices inside **Track Cells**
 
-| Mode | What it does |
+| Choice | What it does |
 |------|--------------|
-| **Fast Mode** | Assign one cell type to every tracked cell (quick typing). |
-| **Manual** | You click each detected cell in the first frame and choose its type. |
-| **Auto-Classify** | Load a trained phenotype model; every cell is labelled automatically. |
-| **No Classification** | Track only; no cell-type column in the CSV. |
+| **Website QAgents** | Resolve requested cell lines, search licence-checked public microscopy resources, download enough open images where available, then train before tracking. |
+| **User Data** | Train from a local folder with one class folder per requested cell line; the folder names are checked before training starts. |
+| **Existing Model** | Load a previously trained `class_map.json` model for the requested cell lines. |
+| **Single Line Label** | Allowed only for one declared cell line; all tracks are labelled with that line while detection/tracking still uses cell borders and centroids. |
 
 ### Output files per run
 
@@ -285,7 +302,9 @@ CytoTrack_AI/
 
 ## Licensing
 
-CytoTrack AI itself is open source. The application will only download or redistribute data that carries a permissive licence (`CC-0`, `CC-BY-*`, `CC-BY-SA-*`, `MIT`, `Apache-2.0`, `BSD-*`, public domain). If you fine-tune a classifier on datasets fetched via **Train Phenotype (Online DB)**, retain the per-download `manifest.json` and the top-level `LICENSES.json` so attributions flow downstream.
+CytoTrack AI project source is released under the MIT License; see `LICENSE` and `CITATION.cff`. The application will only download or redistribute data that carries a permissive licence (`CC-0`, `CC-BY-*`, `CC-BY-SA-*`, `MIT`, `Apache-2.0`, `BSD-*`, public domain). If you fine-tune a classifier on datasets fetched via **Train Phenotype (Online DB)**, retain the per-download `manifest.json` and the top-level `LICENSES.json` so attributions flow downstream.
+
+Paper-facing result bundles should retain `RESULT/RESEARCH_USE_PROVENANCE.md` plus each run's `manifest.json`, migration CSVs, videos, plots, dashboards, and QC audits. Optional non-commercial components such as NVIDIA LocateAnything-3B are opt-in and must be declared in the run manifest if used.
 
 Third-party acknowledgements:
 

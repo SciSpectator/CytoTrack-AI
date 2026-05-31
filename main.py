@@ -64,12 +64,12 @@ def main():
                 break
             elif "Track" in choice:
                 run_tracking(gui)
+            elif "Train Cell Line" in choice:
+                run_qagent_morphology_pretraining(gui)
             elif "Train Phenotype (Online" in choice or "Online DB" in choice:
                 run_training_online(gui)
             elif "Train" in choice:
                 run_training(gui)
-            elif "Generate Test" in choice:
-                run_generate_data(gui)
             elif "Analyze" in choice:
                 run_analysis(gui)
             elif "Help" in choice:
@@ -187,6 +187,143 @@ def _load_any_classifier(model_path: str):
     return CellClassifierTrainer.load_model(model_path), "pixel"
 
 
+def _normalise_model_folder(path: str) -> str:
+    if not path:
+        return ""
+    model_path = os.path.join(path, "model")
+    if os.path.exists(model_path):
+        return model_path
+    return path
+
+
+def _load_classifier_from_folder(gui, model_dir: str):
+    model_path = _normalise_model_folder(model_dir)
+    if not os.path.exists(os.path.join(model_path, "class_map.json")):
+        gui.show_message(
+            "Invalid model folder",
+            "The selected folder must contain class_map.json "
+            "or a model/ subfolder containing class_map.json.",
+            ["OK"],
+        )
+        return None, None, None
+    try:
+        classifier, classifier_kind = _load_any_classifier(model_path)
+        return classifier, classifier_kind, model_path
+    except Exception as e:
+        gui.show_message("Error", f"Failed to load model:\n{e}", ["OK"])
+        return None, None, None
+
+
+def _ask_tracking_cell_line_context(gui):
+    from qagents import parse_cell_lines
+
+    params = gui.show_input_dialog(
+        "Cell Lines Required",
+        [
+            "Cell line(s), comma separated",
+            "Microscopy condition",
+            "Minimum website images per cell line",
+        ],
+        [
+            "HeLa",
+            "light microscope phase contrast brightfield DIC",
+            "200",
+        ],
+    )
+    if not params:
+        return None
+    try:
+        cell_lines = parse_cell_lines(params[0])
+        condition_query = (
+            params[1].strip() or
+            "light microscope phase contrast brightfield DIC"
+        )
+        min_images = max(20, int(params[2]))
+    except ValueError:
+        gui.show_message("Error", "Invalid cell-line training settings.", ["OK"])
+        return None
+    if not cell_lines:
+        gui.show_message(
+            "Error",
+            "Tracking cannot start until at least one cell line is specified.",
+            ["OK"],
+        )
+        return None
+
+    source = gui.show_message(
+        "Pre-Tracking Training",
+        "Choose how the morphology classifier should be prepared before "
+        "tracking. Website resources are licence-checked and cached outside "
+        "RESULT; user data must be arranged as one folder per cell line.",
+        [
+            "Website QAgents",
+            "User Data",
+            "Existing Model",
+            "Single Line Label",
+        ],
+    )
+    if source is None:
+        return None
+
+    classifier = None
+    classifier_kind = None
+    model_path = None
+    training_source = source
+
+    if source == "Website QAgents":
+        model_path = run_qagent_morphology_pretraining(
+            gui,
+            default_cell_lines=cell_lines,
+            default_condition=condition_query,
+            default_min_images=min_images,
+        )
+        if not model_path:
+            return None
+        classifier, classifier_kind, model_path = _load_classifier_from_folder(
+            gui, model_path)
+        if classifier is None:
+            return None
+    elif source == "User Data":
+        model_path = run_training(gui, expected_cell_lines=cell_lines)
+        if not model_path:
+            return None
+        classifier, classifier_kind, model_path = _load_classifier_from_folder(
+            gui, model_path)
+        if classifier is None:
+            return None
+    elif source == "Existing Model":
+        picked = gui.show_folder_dialog(
+            "Select trained model folder containing class_map.json"
+        )
+        if not picked:
+            return None
+        classifier, classifier_kind, model_path = _load_classifier_from_folder(
+            gui, picked)
+        if classifier is None:
+            return None
+    elif source == "Single Line Label":
+        if len(cell_lines) != 1:
+            gui.show_message(
+                "Training Required",
+                "Multiple cell lines require Website QAgents, User Data, "
+                "or an Existing Model so cells can be classified by line.",
+                ["OK"],
+            )
+            return None
+        training_source = "single_cell_line_declared_no_classifier"
+
+    return {
+        "cell_lines": cell_lines,
+        "condition_query": condition_query,
+        "min_images": min_images,
+        "training_source": training_source,
+        "classifier": classifier,
+        "classifier_kind": classifier_kind,
+        "model_path": model_path,
+        "single_cell_type": cell_lines[0] if len(cell_lines) == 1 else None,
+    }
+
+
 def _classify_one(classifier, kind, detector, image, bbox):
     """Route a single-cell prediction to the right backend. Returns
     ``(label, confidence)`` or ``("Unknown", 0.0)`` on failure."""
@@ -219,7 +356,8 @@ def show_help(gui):
         "4. Click Start Tracking\n\n"
         "KEY FEATURES:\n"
         "• Kalman + Hungarian tracker\n"
-        "• Multi-strategy detector\n"
+        "• Multi-strategy border-aware detector\n"
+        "• Self-repair detector calibration before tracking\n"
         "• Better re-detection across frames\n\n"
         "OUTPUT FILES:\n"
         "• tracking_video.avi\n"
@@ -251,9 +389,8 @@ def run_tracking(gui):
             return []
 
     files = _images_in(folder)
-    # If the user picked the output root from "Generate Test Data"
-    # (e.g. `test_data/`), the actual PNGs live in `frames/` one level
-    # down. Auto-descend so the user doesn't have to know the layout.
+    # Auto-descend into a frames/ folder if the user selected a parent
+    # directory produced by another tool or previous run.
     if not files:
         frames_sub = os.path.join(folder, "frames")
         if os.path.isdir(frames_sub):
@@ -266,85 +403,31 @@ def run_tracking(gui):
             "Error",
             f"No images found in:\n{folder}\n\n"
             f"Looked for: {', '.join(exts)}\n"
-            f"If you used 'Generate Test Data', select the parent folder "
-            f"(e.g. 'test_data') or the 'frames' subfolder directly.",
+            "Select a folder containing images, or a parent folder with a "
+            "frames/ subfolder.",
             ["OK"])
         return
 
-    mode = gui.show_message(
-        "Classification Mode",
-        "How do you want to identify cells?\n\n"
-        "• Fast Mode - Assign ONE type to all cells\n"
-        "• Manual - YOU classify each cell interactively\n"
-        "• Auto-Classify - AI classifies each cell\n"
-        "• No Classification - Track without types",
-        ["Fast Mode", "Manual", "Auto-Classify", "No Classification"],
-    )
-
-    if mode is None:
+    context = _ask_tracking_cell_line_context(gui)
+    if context is None:
         return
 
-    classifier = None
-    classifier_kind = None
-    single_cell_type = None
+    classifier = context["classifier"]
+    classifier_kind = context["classifier_kind"]
+    single_cell_type = context["single_cell_type"]
     manual_types = None
-    cell_type_list = []
-
-    if mode == "Fast Mode":
-        params = gui.show_input_dialog(
-            "Cell Type",
-            ["Enter cell type name (e.g., HeLa, MCF7, Fibroblast)"],
-            ["Cell"],
+    if classifier is not None:
+        kind_label = ("Cellpose-SAM feature MLP"
+                      if classifier_kind == "feature" else "pixel-based ViT/CNN")
+        gui.show_message(
+            "Pre-Tracking Model Ready",
+            f"Cell line(s): {', '.join(context['cell_lines'])}\n"
+            f"Training source: {context['training_source']}\n"
+            f"Backend: {kind_label}\n"
+            f"Model: {context['model_path']}\n\n"
+            f"Classes: {', '.join(classifier.classes)}",
+            ["Continue"],
         )
-        if params and params[0].strip():
-            single_cell_type = params[0].strip()
-        else:
-            return
-
-    elif mode == "Manual":
-        params = gui.show_input_dialog(
-            "Define Cell Types",
-            ["Enter cell types separated by comma\n(e.g., Cancer, Healthy, Debris)"],
-            ["TypeA, TypeB, Debris"],
-        )
-        if params and params[0].strip():
-            cell_type_list = [t.strip() for t in params[0].split(",") if t.strip()]
-            if not cell_type_list:
-                gui.show_message("Error", "Enter at least one cell type!", ["OK"])
-                return
-        else:
-            return
-
-    elif mode == "Auto-Classify":
-        model_dir = gui.show_folder_dialog("Select Trained Model Folder")
-        if not model_dir:
-            return
-
-        model_path = os.path.join(model_dir, "model")
-        if not os.path.exists(model_path):
-            model_path = model_dir
-
-        if not os.path.exists(os.path.join(model_path, "class_map.json")):
-            gui.show_message(
-                "Error",
-                "Invalid model folder!\n\nMust contain class_map.json",
-                ["OK"],
-            )
-            return
-
-        try:
-            classifier, classifier_kind = _load_any_classifier(model_path)
-            kind_label = ("Cellpose-SAM feature MLP"
-                          if classifier_kind == "feature" else "pixel-based ViT/CNN")
-            gui.show_message(
-                "Model Loaded",
-                f"Backend: {kind_label}\n\n"
-                f"Cell types in model:\n{', '.join(classifier.classes)}",
-                ["Continue"],
-            )
-        except Exception as e:
-            gui.show_message("Error", f"Failed to load model:\n{e}", ["OK"])
-            return
 
     gui.show_message(
         "Image Settings",
@@ -357,53 +440,6 @@ def run_tracking(gui):
     confirmed = show_image_settings_preview(gui.screen, files, Settings)
     if not confirmed:
         return
-
-    if mode == "Manual":
-        gui.show_message(
-            "Manual Classification",
-            "Now detecting cells in first frame...\n\n"
-            "You will classify each detected cell by:\n"
-            "• Clicking the type button, or\n"
-            "• Pressing number keys 1-8",
-            ["Continue"],
-        )
-
-        first_frame = cv2.imread(files[0])
-        if first_frame is None:
-            gui.show_message("Error", "Cannot read first image!", ["OK"])
-            return
-
-        detector = CellDetector(min_area=50, max_area=8000,
-                                sensitivity="locate")
-        detector.calibrate(first_frame)
-        detections = detector.detect(first_frame)
-
-        if not detections:
-            gui.show_message("Error", "No cells detected in first frame!", ["OK"])
-            return
-
-        gui.show_message(
-            "Cells Detected",
-            f"Found {len(detections)} cells.\n\n"
-            "Now classify each cell interactively.",
-            ["Start Classification"],
-        )
-
-        manual_types = manual_cell_classification(gui.screen, first_frame,
-                                                  detections, cell_type_list)
-
-        if manual_types is None:
-            gui.show_message("Cancelled", "Classification cancelled.", ["OK"])
-            return
-
-        if len(manual_types) != len(detections):
-            gui.show_message(
-                "Incomplete",
-                f"Only {len(manual_types)}/{len(detections)} cells classified.\n"
-                "Please classify all cells.",
-                ["OK"],
-            )
-            return
 
     params = gui.show_input_dialog(
         "Tracking Parameters",
@@ -420,32 +456,29 @@ def run_tracking(gui):
         gui.show_message("Error", "Invalid numbers!", ["OK"])
         return
 
-    try:
-        import cellpose  # noqa: F401
-    except Exception:
-        gui.show_message(
-            "Cellpose Required",
-            "AI detection (Cellpose-SAM) is required for tracking but the\n"
-            "'cellpose' package is not installed in this environment.\n\n"
-            "Install with:  pip install cellpose",
-            ["OK"],
-        )
-        return
-
     _do_tracking(
         gui, files, pixel_size, time_per_frame,
         classifier=classifier,
         classifier_kind=classifier_kind,
         single_cell_type=single_cell_type,
         manual_types=manual_types,
-        sensitivity="locate",
+        cell_lines=context["cell_lines"],
+        condition_query=context["condition_query"],
+        pretracking_training_source=context["training_source"],
+        pretracking_model_path=context["model_path"],
+        min_training_images_per_cell_line=context["min_images"],
+        sensitivity="max",
     )
 
 
 def _do_tracking(gui, files, pixel_size, time_per_frame,
                  classifier=None, classifier_kind: Optional[str] = None,
                  single_cell_type=None, manual_types=None,
-                 sensitivity: str = "locate"):
+                 cell_lines=None, condition_query=None,
+                 pretracking_training_source=None,
+                 pretracking_model_path=None,
+                 min_training_images_per_cell_line: int = 200,
+                 sensitivity: str = "max"):
     import cv2
     import numpy as np
     from datetime import datetime
@@ -459,6 +492,10 @@ def _do_tracking(gui, files, pixel_size, time_per_frame,
     from ai_assistant import VisualLLMHelper
     from lost_cell_recovery import LostCellRecovery
     from hardware_profile import detect_hardware
+    from pipeline_architecture import (build_quality_first_run_plan,
+                                       write_run_manifest)
+    from self_repair import (SelfRepairingDetectorLoop,
+                             VisualTrackingAuditAgent)
 
     hw = detect_hardware()
     print("[hardware] " + hw.summary())
@@ -475,22 +512,70 @@ def _do_tracking(gui, files, pixel_size, time_per_frame,
 
         height, width = first.shape[:2]
 
-        progress(5, "Detecting cells...")
-        # Apply hardware-tier latency knobs (accuracy is unchanged — core
-        # detection strategies always run; only the optional extras are gated).
-        detector = CellDetector(min_area=50, max_area=8000,
-                                use_blob_detector=hw.use_blob_detector,
-                                use_hough_circles=hw.use_hough_circles,
-                                sensitivity=sensitivity)
-        print(f"[detector] sensitivity={sensitivity}")
-        # Auto-tune detector to the actual cell size on this dataset.
-        calib = detector.calibrate(first)
-        print(f"Calibration: {calib}")
-        raw_detections = detector.detect(first)
+        folder = os.path.dirname(files[0])
+        output_dir = os.path.join(
+            os.path.dirname(folder),
+            f"tracking_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+        )
+        os.makedirs(output_dir, exist_ok=True)
+        declared_cell_lines = [
+            c.strip() for c in (cell_lines or []) if c and c.strip()
+        ]
+        if not declared_cell_lines and single_cell_type:
+            declared_cell_lines = [single_cell_type]
+        run_plan = build_quality_first_run_plan(
+            cell_lines=declared_cell_lines,
+            condition_query=(
+                condition_query or
+                "light microscope phase contrast brightfield DIC"),
+            min_training_images_per_cell_line=(
+                min_training_images_per_cell_line),
+            quality_mode="quality_first",
+        )
+        manifest_path = write_run_manifest(run_plan, output_dir)
+        print(f"[architecture] run manifest: {manifest_path}")
+        pretracking_manifest = {
+            "cell_lines": declared_cell_lines,
+            "condition_query": condition_query,
+            "training_source": pretracking_training_source,
+            "model_path": pretracking_model_path,
+            "classifier_kind": classifier_kind,
+            "min_training_images_per_cell_line": (
+                min_training_images_per_cell_line),
+            "detector_sensitivity": sensitivity,
+            "track_point": "cell_center_centroid_not_edge",
+        }
+        import json as _json
+        with open(os.path.join(output_dir, "pretracking_training_manifest.json"),
+                  "w", encoding="utf-8") as f:
+            _json.dump(pretracking_manifest, f, indent=2, sort_keys=True)
+
+        progress(5, "Self-repairing detector calibration...")
         reasoner = DebrisReasoner(strategy="auto")
         visual_llm = VisualLLMHelper(prefer="auto")
-        detections, rejected = filter_debris(detector, first, raw_detections,
-                                             reasoner=reasoner)
+
+        sensitivity_candidates = []
+        if sensitivity != "locate":
+            sensitivity_candidates.append(sensitivity)
+        sensitivity_candidates.extend(["ai", "max", "high", "normal"])
+        repair_loop = SelfRepairingDetectorLoop(
+            min_area=50,
+            max_area=8000,
+            use_blob_detector=hw.use_blob_detector,
+            use_hough_circles=hw.use_hough_circles,
+            sensitivities=sensitivity_candidates,
+        )
+        detector, detections, repair_report = repair_loop.run(
+            first,
+            filter_fn=lambda det, img, raw: filter_debris(
+                det, img, raw, reasoner=reasoner),
+            output_dir=output_dir,
+        )
+        raw_detections = detections
+        print("[detector/self-repair] selected="
+              f"{repair_report.selected_sensitivity} "
+              f"count={repair_report.selected_count} "
+              f"score={repair_report.selected_score:.2f}")
         print(f"Debris reasoner ({reasoner.strategy}): kept "
               f"{len(detections)}/{len(raw_detections)} detections "
               f"(visual-LLM backend: {visual_llm.backend})")
@@ -520,13 +605,6 @@ def _do_tracking(gui, files, pixel_size, time_per_frame,
 
         progress(10, f"Found {num_detected} cells!")
 
-        folder = os.path.dirname(files[0])
-        output_dir = os.path.join(
-            os.path.dirname(folder),
-            f"tracking_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
-        )
-        os.makedirs(output_dir, exist_ok=True)
-
         video_path = os.path.join(output_dir, "tracking_video.avi")
         has_types = bool(classifier or single_cell_type or manual_types)
         hud_h = 130 if has_types else 100
@@ -535,7 +613,10 @@ def _do_tracking(gui, files, pixel_size, time_per_frame,
             float(hw.video_fps), (width, height + hud_h),
         )
 
-        tracker = CellTracker(max_missed=15)
+        tracker = CellTracker(
+            max_missed=15,
+            suppress_duplicate_detections=sensitivity in ("locate", "high", "max"),
+        )
         # Tune Hungarian gating to the cell size so dense scenes don't ID-swap.
         tr_calib = tracker.calibrate(detections)
         print(f"Tracker gating: {tr_calib}")
@@ -552,6 +633,7 @@ def _do_tracking(gui, files, pixel_size, time_per_frame,
             )
 
         total = len(files)
+        current_detections = detections
         for idx, fpath in enumerate(files):
             progress(12 + idx, f"Frame {idx+1}/{total}")
 
@@ -569,6 +651,7 @@ def _do_tracking(gui, files, pixel_size, time_per_frame,
                 dets_raw = detector.detect(frame)
                 dets, _ = filter_debris(detector, frame, dets_raw,
                                         reasoner=reasoner)
+                current_detections = dets
                 tracker.update(frame, detections=dets)
 
                 # Try to recover any track that went inactive mid-frame
@@ -598,6 +681,27 @@ def _do_tracking(gui, files, pixel_size, time_per_frame,
                         t.cell_type = default_type
 
             vis = frame_display.copy()
+
+            for det in current_detections:
+                border_color = (0, 255, 255) if getattr(det, "has_border", False) else (0, 128, 255)
+                if getattr(det, "has_border", False):
+                    cv2.drawContours(
+                        vis,
+                        [det.contour.astype(np.int32)],
+                        -1,
+                        border_color,
+                        1,
+                    )
+                else:
+                    x, y, w, h = det.bbox
+                    cv2.rectangle(vis, (x, y), (x + w, y + h), border_color, 1)
+                cv2.circle(
+                    vis,
+                    (int(round(det.center_x)), int(round(det.center_y))),
+                    3,
+                    (0, 0, 255),
+                    -1,
+                )
 
             for tid, track in tracker.tracks.items():
                 if not track.boxes:
@@ -633,8 +737,6 @@ def _do_tracking(gui, files, pixel_size, time_per_frame,
             mode_str = ""
             if classifier:
                 mode_str = " (AI Classification)"
-            elif manual_types:
-                mode_str = " (Manual Classification)"
             elif single_cell_type:
                 mode_str = f" ({single_cell_type})"
 
@@ -643,7 +745,7 @@ def _do_tracking(gui, files, pixel_size, time_per_frame,
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (100, 200, 150), 2)
             cv2.putText(hud, f"Frame: {idx+1}/{total}", (15, 55),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
-            cv2.putText(hud, f"Detected: {num_detected}", (180, 55),
+            cv2.putText(hud, f"Detected: {len(current_detections)}", (180, 55),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1)
             cv2.putText(hud, f"Active: {tracker.active_count}", (350, 55),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
@@ -715,6 +817,23 @@ def _do_tracking(gui, files, pixel_size, time_per_frame,
                         os.path.join(output_dir, "cell_type_summary.csv"),
                         index=False)
 
+            tracking_warnings = VisualTrackingAuditAgent().summarize(
+                tracks,
+                max_step_px=max(30.0, tracker.max_distance * 1.5),
+            )
+            if tracking_warnings:
+                import csv as _csv
+                qc_dir = os.path.join(output_dir, "qc")
+                os.makedirs(qc_dir, exist_ok=True)
+                with open(os.path.join(qc_dir, "tracking_visual_audit.csv"),
+                          "w", encoding="utf-8", newline="") as f:
+                    writer = _csv.DictWriter(
+                        f,
+                        fieldnames=["track_id", "frame", "step_px", "warning"],
+                    )
+                    writer.writeheader()
+                    writer.writerows(tracking_warnings)
+
         progress(total + 20, "Generating publication plots...")
         if tracks and detailed_df is not None and summary_df is not None:
             visualizer = TrajectoryVisualizer(pixel_size, pixel_size, time_per_frame)
@@ -758,7 +877,7 @@ def _do_tracking(gui, files, pixel_size, time_per_frame,
         gui.show_message("Error", str(e), ["OK"])
 
 
-def run_training(gui):
+def run_training(gui, expected_cell_lines=None):
     try:
         import torch  # noqa: F401
         from classifier import CellClassifierTrainer
@@ -806,7 +925,23 @@ def run_training(gui):
 
     data_dir = gui.show_folder_dialog("Select Training Data Folder")
     if not data_dir:
-        return
+        return None
+
+    if expected_cell_lines:
+        from qagents import UserDataTrainingQAgent
+        report = UserDataTrainingQAgent().inspect(data_dir, expected_cell_lines)
+        if not report["ready"]:
+            gui.show_message(
+                "Training Data Does Not Match Cell Lines",
+                "Tracking requested these cell lines:\n"
+                f"{', '.join(expected_cell_lines)}\n\n"
+                "Your local training folder must contain one class folder "
+                "for each requested cell line.\n\n"
+                f"Missing: {', '.join(report['missing_expected_cell_lines']) or 'none'}\n"
+                f"Notes: {'; '.join(report['notes']) or 'none'}",
+                ["OK"],
+            )
+            return None
 
     subfolders = [d for d in os.listdir(data_dir)
                   if os.path.isdir(os.path.join(data_dir, d)) and not d.startswith(".")]
@@ -863,11 +998,12 @@ def run_training(gui):
                 gui, data_dir=data_dir, output_dir=output_dir,
                 epochs=max(epochs, 20), resume_from=resume_from,
             )
+            return os.path.join(output_dir, "model")
         except Exception as e:
             import traceback
             traceback.print_exc()
             gui.show_message("Training Failed", str(e), ["OK"])
-        return
+        return None
 
     try:
         progress = gui.show_progress("Training AI Model", 100)
@@ -905,11 +1041,13 @@ def run_training(gui):
             "phenotypes without losing what's already learned.",
             ["OK"],
         )
+        return os.path.join(output_dir, "model")
 
     except Exception as e:
         import traceback
         traceback.print_exc()
         gui.show_message("Training Failed", str(e), ["OK"])
+        return None
 
 
 def _train_feature_classifier(gui, data_dir: str, output_dir: str,
@@ -944,6 +1082,158 @@ def _train_feature_classifier(gui, data_dir: str, output_dir: str,
         "later without losing what's already learned.",
         ["OK"],
     )
+
+
+def run_qagent_morphology_pretraining(
+        gui,
+        default_cell_lines=None,
+        default_condition: Optional[str] = None,
+        default_min_images: int = 200):
+    """Research open public morphology data for user-specified cell lines,
+    then train before tracking when every class has enough usable images."""
+    try:
+        import torch  # noqa: F401
+    except ImportError as e:
+        gui.show_message(
+            "Missing Requirements",
+            f"Install PyTorch:\npip install torch torchvision Pillow\n\n"
+            f"Error: {e}",
+            ["OK"],
+        )
+        return
+
+    from qagents import MorphologyTrainingQAgent, parse_cell_lines
+    from pipeline_architecture import build_quality_first_run_plan
+
+    params = gui.show_input_dialog(
+        "QAgents Morphology Pretraining",
+        [
+            "Cell lines separated by comma (e.g. MCF7, U2OS, Huh7)",
+            "Microscopy condition",
+            "Minimum public images per cell line",
+            "Model folder name",
+        ],
+        [
+            ", ".join(default_cell_lines or ["MCF7", "U2OS"]),
+            default_condition or "light microscope phase contrast brightfield DIC",
+            str(default_min_images),
+            "qagent_morphology_model",
+        ],
+    )
+    if not params:
+        return
+
+    try:
+        cell_lines = parse_cell_lines(params[0])
+        condition = params[1].strip() or "light microscope phase contrast brightfield DIC"
+        min_images = max(20, int(params[2]))
+        model_name = params[3].strip() or "qagent_morphology_model"
+    except ValueError:
+        gui.show_message("Error", "Invalid QAgent settings.", ["OK"])
+        return
+
+    if not cell_lines:
+        gui.show_message("Error", "Enter at least one cell line.", ["OK"])
+        return
+
+    project_root = os.path.dirname(os.path.abspath(__file__))
+    arch_plan = build_quality_first_run_plan(
+        cell_lines,
+        condition_query=condition,
+        min_training_images_per_cell_line=min_images,
+        project_root=project_root,
+    )
+
+    agent = MorphologyTrainingQAgent(project_root=project_root)
+    qagent_root = agent.default_output_dir()
+    os.makedirs(qagent_root, exist_ok=True)
+
+    plan = agent.plan(
+        cell_lines,
+        condition_query=condition,
+        min_images_per_cell_line=min_images,
+    )
+    plan_path = agent.write_plan(plan, qagent_root)
+    with open(os.path.join(qagent_root, "pipeline_architecture_manifest.json"),
+              "w", encoding="utf-8") as f:
+        import json as _json
+        _json.dump(arch_plan.to_dict(), f, indent=2, sort_keys=True)
+
+    blocked = [p for p in plan.class_plans if p.status != "ready"]
+    if blocked:
+        msg_lines = [
+            "QAgents created a research plan, but not every cell line has "
+            "an open-licensed public source with enough matching images.",
+            "",
+            f"Plan: {plan_path}",
+            "",
+            "Needs user/local data:",
+        ]
+        for item in blocked:
+            msg_lines.append(f"  - {item.cell_line}: {'; '.join(item.notes)}")
+        gui.show_message("QAgent Plan Needs Data", "\n".join(msg_lines), ["OK"])
+        return None
+
+    limits = gui.show_input_dialog(
+        "QAgent Training",
+        ["Images per class to download", "Epochs"],
+        [str(min_images), "8"],
+    )
+    if not limits:
+        return
+    try:
+        per_class = max(min_images, int(limits[0]))
+        epochs = max(1, int(limits[1]))
+    except ValueError:
+        gui.show_message("Error", "Invalid training numbers.", ["OK"])
+        return
+
+    try:
+        progress = gui.show_progress("QAgents morphology training", 100)
+        progress(5, "Downloading open-licensed public images...")
+        data_root = os.path.join(qagent_root, "training_data", model_name)
+        agent.prepare_training_data(
+            plan,
+            target_root=data_root,
+            max_samples_per_class=per_class,
+        )
+        output_dir = os.path.join(qagent_root, model_name)
+        progress(20, "Training morphology classifier...")
+
+        if _cellpose_available():
+            _train_feature_classifier(
+                gui, data_dir=data_root, output_dir=output_dir,
+                epochs=max(epochs, 20), resume_from=None,
+            )
+        else:
+            from classifier import CellClassifierTrainer
+            trainer = CellClassifierTrainer(output_dir=output_dir)
+            train_loader, val_loader = trainer.prepare_data(data_root)
+
+            def prog_cb(step, total, msg):
+                progress(20 + int(75 * step / max(1, total)), msg)
+
+            trainer.train(
+                train_loader,
+                val_loader,
+                epochs=epochs,
+                progress_callback=prog_cb,
+            )
+        progress(100, "Complete.")
+        gui.show_message(
+            "QAgent Training Complete",
+            f"Plan: {plan_path}\n"
+            f"Training data: {data_root}\n"
+            f"Model folder: {output_dir}/model/\n\n"
+            "The QAgent plan and licence manifests are stored in model_cache, not RESULT.",
+            ["OK"],
+        )
+        return os.path.join(output_dir, "model")
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        gui.show_message("QAgent Training Failed", str(e), ["OK"])
+        return None
 
 
 def run_training_online(gui):

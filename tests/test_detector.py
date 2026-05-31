@@ -24,6 +24,8 @@ def test_detect_single_cell(single_cell_frame):
     best = max(detections, key=lambda d: d.area)
     assert abs(best.center_x - 40) < 8
     assert abs(best.center_y - 40) < 8
+    assert best.has_border
+    assert best.contour is not None
 
 
 def test_detect_multiple_cells_in_synthetic_frame(first_frame):
@@ -48,3 +50,9 @@ def test_nms_prefers_higher_confidence():
     result = det._nms([a, b], iou_thr=0.1)
     assert len(result) == 1
     assert result[0] is a
+
+
+def test_detection_centroid_aligned_bbox_uses_center_not_edge():
+    d = Detection(x=0, y=0, w=20, h=20,
+                  center_x=100.0, center_y=80.0, area=400.0)
+    assert d.centroid_aligned_bbox() == (90, 70, 20, 20)

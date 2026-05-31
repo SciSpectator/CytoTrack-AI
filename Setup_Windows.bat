@@ -26,11 +26,11 @@ call cell_track_venv\Scripts\activate.bat
 python -m pip install --upgrade pip wheel
 pip install -r requirements.txt
 
-REM Optional NVIDIA LocateAnything-3B detection backend (default detector).
-REM NVIDIA non-commercial license; ~3B-param model, GPU recommended. The app
-REM falls back to the classical detector if this fails. Set
-REM CYTOTRACK_SKIP_LOCATE=1 to skip.
-if not defined CYTOTRACK_SKIP_LOCATE (
+REM Optional NVIDIA LocateAnything-3B detection backend.
+REM NVIDIA non-commercial license; ~3B-param model, GPU recommended. It is
+REM opt-in so the default install remains open-source/research-paper clean.
+REM Set CYTOTRACK_INSTALL_LOCATE=1 to install it.
+if "%CYTOTRACK_INSTALL_LOCATE%"=="1" (
     echo Installing optional LocateAnything-3B backend ^(NVIDIA non-commercial license^)...
     pip install -r requirements-locate.txt
 )

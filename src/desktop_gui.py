@@ -383,14 +383,12 @@ class FancyGUI(QMainWindow):
     MENU_ITEMS = [
         ("Track Cells", "Detect, track, and analyse cell migration",
          "TRACK"),
-        ("Generate Test Data", "Synthesize microscopy images for testing",
-         "GENERATE"),
+        ("Train Cell Line",
+         "Research public cell-line data and train morphology before tracking",
+         "TRAIN_ONLINE"),
         ("Train Phenotype (Local)",
          "Train a cell-type classifier from your own image folders",
          "TRAIN"),
-        ("Train Phenotype (Online DB)",
-         "Search & train on an open-licensed cell image database",
-         "TRAIN_ONLINE"),
         ("Analyze Results", "Load a previous CSV and regenerate plots",
          "ANALYZE"),
         ("Help", "Workflow, outputs, and current feature set", "HELP"),
@@ -521,9 +519,8 @@ class FancyGUI(QMainWindow):
     def _on_menu(self, key: str) -> None:
         mapping = {
             "TRACK": "Track Cells",
-            "GENERATE": "Generate Test Data",
             "TRAIN": "Train Phenotype (Local)",
-            "TRAIN_ONLINE": "Train Phenotype (Online DB)",
+            "TRAIN_ONLINE": "Train Cell Line",
             "ANALYZE": "Analyze Results",
             "HELP": "Help",
             "EXIT": "Exit",
