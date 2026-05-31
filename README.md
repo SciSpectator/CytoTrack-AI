@@ -310,6 +310,18 @@ detections, repaired identity jumps, whole-cell border extent, metrics/plots/
 video output, and det/GT plausibility when manual SEG masks are available.
 `RESULT/` remains local and is not committed.
 
+For the broad automatic upgrade/verification loop, run:
+
+```bash
+python3 tools/self_upgrade_validation_loop.py --iterations 1 --frames-long 180 --stress-window-short 8 --stress-window-long 20
+```
+
+This runs the full test suite, 30 short real-movie clips, 30 longer-window
+real-movie clips, long-video validation, frame-folder result generation,
+morphology training for HeLa/Huh7, dashboard/video readability checks, and QC
+manifest validation. The report is written to
+`RESULT/self_upgrade_validation/self_upgrade_validation_report.json`.
+
 ---
 
 ## Project layout
