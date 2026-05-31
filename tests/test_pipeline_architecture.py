@@ -30,6 +30,8 @@ def test_quality_first_plan_contains_backend_registries(tmp_path):
     assert "CellBirthCuratorQAgent" in plan.qagents
     assert "PerCellVisualAgentQAgent" in plan.qagents
     assert "FrameMemoryQAgent" in plan.qagents
+    assert "BottomRegionCoverageQAgent" in plan.qagents
+    assert "WallArtifactCuratorQAgent" in plan.qagents
     assert "VisualBorderAgent" in plan.qagents
     assert plan.tracking_constraints["track_point"] == (
         "mask_centroid_or_distance_transform_center")
@@ -45,6 +47,8 @@ def test_quality_first_plan_contains_backend_registries(tmp_path):
     assert plan.tracking_constraints["one_visual_agent_owns_one_cell"] is True
     assert plan.tracking_constraints[
         "frame_memory_required_for_dense_video"] is True
+    assert plan.tracking_constraints["bottom_region_coverage_audit"] is True
+    assert plan.tracking_constraints["wall_artifact_curator_required"] is True
 
 
 def test_model_cache_root_is_not_result(tmp_path):

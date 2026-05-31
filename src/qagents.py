@@ -617,6 +617,47 @@ class FrameMemoryQAgent:
         return step <= self.max_center_step_px
 
 
+class BottomRegionCoverageQAgent:
+    """Audits whether late-frame lower cells are represented by tracks."""
+
+    def __init__(self, bottom_y_fraction: float = 0.72,
+                 min_bottom_fraction: float = 0.12):
+        self.bottom_y_fraction = float(bottom_y_fraction)
+        self.min_bottom_fraction = float(min_bottom_fraction)
+
+    def audit(self, frame_height: int,
+              centers: Iterable[Tuple[float, float]]) -> Dict[str, object]:
+        centers = list(centers)
+        if not centers:
+            return {
+                "bottom_count": 0,
+                "total_count": 0,
+                "bottom_fraction": 0.0,
+                "passes": False,
+            }
+        threshold = float(frame_height) * self.bottom_y_fraction
+        bottom_count = sum(1 for _, y in centers if float(y) >= threshold)
+        fraction = bottom_count / max(1, len(centers))
+        return {
+            "bottom_count": bottom_count,
+            "total_count": len(centers),
+            "bottom_fraction": fraction,
+            "passes": fraction >= self.min_bottom_fraction,
+        }
+
+
+class WallArtifactCuratorQAgent:
+    """Rejects detections too close to known chamber-wall artifact bands."""
+
+    def __init__(self, left_margin_px: int = 58, right_margin_px: int = 312):
+        self.left_margin_px = int(left_margin_px)
+        self.right_margin_px = int(right_margin_px)
+
+    def accept_center(self, center_x: float) -> bool:
+        x = float(center_x)
+        return self.left_margin_px <= x <= self.right_margin_px
+
+
 class DashboardQAgent:
     """Defines the minimum dashboard assets expected from a tracking run."""
 
@@ -742,6 +783,8 @@ class MorphologyTrainingQAgent:
                 "CellBirthCuratorQAgent: requires repeated observations before creating a new cell identity",
                 "PerCellVisualAgentQAgent: one visual agent owns one cell and refuses long center jumps",
                 "FrameMemoryQAgent: carries per-cell center, velocity, and appearance memory into the next frame",
+                "BottomRegionCoverageQAgent: audits lower-frame cells so bottom migration is not lost",
+                "WallArtifactCuratorQAgent: removes chamber-wall artifact bands before counting cells",
                 "WebsiteResearchQAgent: finds public microscopy dataset candidates",
                 "LicenceCuratorQAgent: blocks non-open or undersized sources",
                 "UserDataTrainingQAgent: validates local class folders when the user provides training images",

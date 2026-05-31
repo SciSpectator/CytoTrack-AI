@@ -5,6 +5,7 @@ from qagents import (ConditionMatcherQAgent, DetectorEnsembleQAgent,
                      MorphologyTrainingQAgent, TrackingCuratorQAgent,
                      PerCellVisualAgentQAgent, StaticArtifactCuratorQAgent,
                      VideoMorphologyTrainingQAgent, FrameMemoryQAgent,
+                     BottomRegionCoverageQAgent, WallArtifactCuratorQAgent,
                      UserDataTrainingQAgent,
                      parse_cell_lines)
 
@@ -131,3 +132,18 @@ def test_frame_memory_qagent_predicts_and_gates_next_center():
     assert memory.predict_center(3) == (14.0, 12.0)
     assert memory.accepts(3, (15.0, 12.0)) is True
     assert memory.accepts(3, (25.0, 12.0)) is False
+
+
+def test_bottom_region_and_wall_artifact_curators():
+    bottom = BottomRegionCoverageQAgent(
+        bottom_y_fraction=0.70,
+        min_bottom_fraction=0.25,
+    )
+    report = bottom.audit(100, [(10, 10), (20, 80), (30, 90), (40, 40)])
+    assert report["bottom_count"] == 2
+    assert report["passes"] is True
+
+    wall = WallArtifactCuratorQAgent(left_margin_px=50, right_margin_px=300)
+    assert wall.accept_center(120) is True
+    assert wall.accept_center(20) is False
+    assert wall.accept_center(330) is False
