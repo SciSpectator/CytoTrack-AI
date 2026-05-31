@@ -694,6 +694,38 @@ class MicroscopyInsetExtractionQAgent:
         return (x1, y1, x2 - x1, y2 - y1)
 
 
+class IdentityJumpRepairQAgent:
+    """Splits trajectories when center motion exceeds the accepted gate."""
+
+    def __init__(self, max_step_px: float = 18.0,
+                 min_segment_length: int = 8):
+        self.max_step_px = float(max_step_px)
+        self.min_segment_length = int(min_segment_length)
+
+    def split_centers(
+        self,
+        points: Iterable[Tuple[int, float, float]],
+    ) -> List[List[Tuple[int, float, float]]]:
+        ordered = sorted(
+            [(int(f), float(x), float(y)) for f, x, y in points],
+            key=lambda p: p[0],
+        )
+        if not ordered:
+            return []
+        segments: List[List[Tuple[int, float, float]]] = [[ordered[0]]]
+        for prev, curr in zip(ordered[:-1], ordered[1:]):
+            frame_gap = curr[0] - prev[0]
+            step = float(np.hypot(curr[1] - prev[1], curr[2] - prev[2]))
+            if frame_gap != 1 or step > self.max_step_px:
+                segments.append([curr])
+            else:
+                segments[-1].append(curr)
+        return [
+            segment for segment in segments
+            if len(segment) >= self.min_segment_length
+        ]
+
+
 class DashboardQAgent:
     """Defines the minimum dashboard assets expected from a tracking run."""
 
@@ -822,6 +854,7 @@ class MorphologyTrainingQAgent:
                 "BottomRegionCoverageQAgent: audits lower-frame cells so bottom migration is not lost",
                 "WallArtifactCuratorQAgent: removes chamber-wall artifact bands before counting cells",
                 "MicroscopyInsetExtractionQAgent: crops microscope inset before detection in presentation videos",
+                "IdentityJumpRepairQAgent: splits trajectories with impossible center jumps before metrics",
                 "WebsiteResearchQAgent: finds public microscopy dataset candidates",
                 "LicenceCuratorQAgent: blocks non-open or undersized sources",
                 "UserDataTrainingQAgent: validates local class folders when the user provides training images",

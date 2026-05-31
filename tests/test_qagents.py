@@ -7,6 +7,7 @@ from qagents import (ConditionMatcherQAgent, DetectorEnsembleQAgent,
                      VideoMorphologyTrainingQAgent, FrameMemoryQAgent,
                      BottomRegionCoverageQAgent, WallArtifactCuratorQAgent,
                      MicroscopyInsetExtractionQAgent,
+                     IdentityJumpRepairQAgent,
                      UserDataTrainingQAgent,
                      parse_cell_lines)
 
@@ -157,3 +158,17 @@ def test_microscopy_inset_extraction_qagent_validates_and_expands_crop():
 
     assert agent.expand_crop((50, 60, 100, 50), (200, 200),
                              pad_fraction=0.10) == (40, 50, 120, 70)
+
+
+def test_identity_jump_repair_splits_large_center_jumps():
+    repair = IdentityJumpRepairQAgent(max_step_px=5.0, min_segment_length=2)
+    segments = repair.split_centers([
+        (0, 0.0, 0.0),
+        (1, 3.0, 0.0),
+        (2, 30.0, 0.0),
+        (3, 33.0, 0.0),
+    ])
+    assert segments == [
+        [(0, 0.0, 0.0), (1, 3.0, 0.0)],
+        [(2, 30.0, 0.0), (3, 33.0, 0.0)],
+    ]

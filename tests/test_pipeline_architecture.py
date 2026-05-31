@@ -33,6 +33,7 @@ def test_quality_first_plan_contains_backend_registries(tmp_path):
     assert "BottomRegionCoverageQAgent" in plan.qagents
     assert "WallArtifactCuratorQAgent" in plan.qagents
     assert "MicroscopyInsetExtractionQAgent" in plan.qagents
+    assert "IdentityJumpRepairQAgent" in plan.qagents
     assert "VisualBorderAgent" in plan.qagents
     assert plan.tracking_constraints["track_point"] == (
         "mask_centroid_or_distance_transform_center")
@@ -52,6 +53,8 @@ def test_quality_first_plan_contains_backend_registries(tmp_path):
     assert plan.tracking_constraints["wall_artifact_curator_required"] is True
     assert plan.tracking_constraints[
         "microscopy_inset_extraction_before_tracking"] is True
+    assert plan.tracking_constraints[
+        "split_tracks_on_identity_jump_before_metrics"] is True
 
 
 def test_model_cache_root_is_not_result(tmp_path):
