@@ -62,8 +62,8 @@ Setup_Windows.bat
 2. Select a folder of microscopy frames.
 3. Enter the cell line or comma-separated cell lines.
 4. Choose pre-tracking morphology preparation:
-   - **Website QAgents**: licence-checked public resources, cached outside
-     `RESULT/`.
+   - **Train Cell Line From Public Data**: licence-checked public resources,
+     shown for user approval before download.
    - **User Data**: a local folder with one class folder per requested cell
      line.
    - **Existing Model**: a trained folder containing `class_map.json`.
@@ -71,10 +71,10 @@ Setup_Windows.bat
 5. Confirm brightness/contrast/gamma/filter settings.
 6. Run tracking.
 
-All paper-facing outputs go under `RESULT/` with videos, plots, dashboards,
-CSV metrics, manifests, and QC/provenance files. Keep
-`RESULT/RESEARCH_USE_PROVENANCE.md`, `LICENSE`, `NOTICE`, and `CITATION.cff`
-with any manuscript or supplementary result package.
+All paper-facing outputs are written locally under `RESULT/` with videos,
+plots, dashboards, CSV metrics, manifests, and QC/provenance files. `RESULT/`
+is ignored by Git and is not pushed to GitHub. Keep the relevant local result
+folder with any manuscript or supplementary archive.
 
 ### B. Build a proper .exe installer (optional, recommended)
 

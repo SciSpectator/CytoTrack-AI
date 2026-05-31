@@ -8,14 +8,30 @@ cell_track_venv/
 .venv/
 venv/
 
-# Local inspection artifacts; paper-facing outputs belong in RESULT/
+# Local inspection artifacts and generated result bundles
 local_test_outputs/
+RESULT/
+RESULT*/
+tracking_*/
+
+# Local secrets/configuration. Do not commit API keys.
+.env
+.env.*
+*.env
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+credentials/
+*secret*
+*credential*
+*token*
 
 # Generated model/training caches live outside RESULT by design
 model_cache/
 
-# Downloaded public source movies are not committed by default; result
-# bundles and provenance files record the source dataset.
+# Downloaded public source movies are not committed by default.
 real_cell_movies/
 
 # OS/editor noise

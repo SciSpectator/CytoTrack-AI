@@ -47,15 +47,15 @@ Launch:
 
 Menu:
   * Track Cells          — full migration-tracking pipeline
-  * Train AI Classifier  — ViT / CNN transfer learning
+  * Train Cell Line      — public data approval or local class folders
+  * Train Phenotype      — same workflow for phenotype models
   * Analyze Existing Data
-  * Generate Test Data
 
-Classification modes:
-  * Fast Mode           — one type for all cells
-  * Manual              — classify each cell interactively
-  * Auto-Classify       — AI classifies each cell
-  * No Classification
+Tracking setup:
+  * User specifies cell line/cell lines before tracking.
+  * Public data sources are shown for approval before download.
+  * User data uses one local folder per requested cell line.
+  * Existing models can be loaded when class_map.json is present.
 
 
 OUTPUT FILES
@@ -101,4 +101,5 @@ without them — the helpers use clean fallbacks):
     pip install dspy-ai
     pip install vllm                                 # GPU required
     pip install anthropic                            # cloud fallback
-    export ANTHROPIC_API_KEY=...                     # for Claude vision
+    Set ANTHROPIC_API_KEY or OPENAI_API_KEY in your shell when needed.
+    Do not commit .env files or API keys.

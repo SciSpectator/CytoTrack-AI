@@ -1,5 +1,0 @@
-dataset,sequence,folder,dashboard,video,cells,qc_passed
-DIC-C2DH-HeLa,01,DIC-C2DH-HeLa_01_all_cells,DIC-C2DH-HeLa_01_all_cells/dashboard.html,DIC-C2DH-HeLa_01_all_cells/tracking_video.mp4,38,False
-DIC-C2DH-HeLa,02,DIC-C2DH-HeLa_02_all_cells,DIC-C2DH-HeLa_02_all_cells/dashboard.html,DIC-C2DH-HeLa_02_all_cells/tracking_video.mp4,32,False
-Fluo-C2DL-Huh7,01,Fluo-C2DL-Huh7_01_all_cells,Fluo-C2DL-Huh7_01_all_cells/dashboard.html,Fluo-C2DL-Huh7_01_all_cells/tracking_video.mp4,34,False
-Fluo-C2DL-Huh7,02,Fluo-C2DL-Huh7_02_all_cells,Fluo-C2DL-Huh7_02_all_cells/dashboard.html,Fluo-C2DL-Huh7_02_all_cells/tracking_video.mp4,69,False

@@ -22,9 +22,37 @@
 
 CytoTrack AI is a desktop application for **quantitative cell migration analysis** on time-lapse microscopy image sequences. It detects cell borders, tracks the **cell center/centroid** across frames with a modern SORT-style tracker (Kalman filter + Hungarian assignment), and produces migration metrics, trajectory plots, dashboards, videos, and publication-ready CSV summaries.
 
-Before tracking starts, the user must specify the cell line or cell lines. CytoTrack AI can then prepare a morphology classifier from website QAgents that search licence-checked public resources, from user-provided labelled folders, or from an existing trained model. Single-cell-line runs may also use one declared label for all tracks.
+Before tracking starts, the user must specify the cell line or cell lines. CytoTrack AI can then prepare a morphology classifier from public data that the user approves, from user-provided labelled folders, or from an existing trained model. Single-cell-line runs may also use one declared label for all tracks.
 
 The whole interface is a native PyQt5 window with a Frutiger-Aero-inspired theme — no notebook, no browser, no server.
+
+---
+
+## What Users Can Do
+
+CytoTrack AI is built around a full cell-migration workflow:
+
+- **Track cells in time-lapse microscopy movies.** Select a folder of image frames, adjust brightness/contrast/gamma/filter settings, detect cell borders, and track cell centers frame by frame.
+- **Train cell-line morphology before tracking.** Enter one or more cell lines, then train from approved public data or from local user-provided folders.
+- **Train phenotype classifiers.** Use the same training workflow for phenotypes such as treated/untreated, healthy/diseased, resistant/sensitive, or custom experiment labels.
+- **Use public data with approval.** The program searches curated open-licensed public microscopy resources, shows the proposed datasets and licenses, and downloads only after the user approves.
+- **Use local laboratory data.** Select a folder with one subfolder per cell line or phenotype; the program checks that requested classes are present before training.
+- **Load an existing model.** Reuse a trained `class_map.json` model during tracking.
+- **Measure migration.** Export per-cell and per-track measurements such as velocity, total distance, displacement, persistence, confinement ratio, and MSD.
+- **Compare cell lines or phenotypes.** Generate statistical summaries and plots for multiple labelled groups.
+- **Generate visual outputs.** Save overlay videos, trajectory plots, velocity histograms, displacement plots, rose plots, MSD plots, and interactive Plotly dashboards.
+- **Audit tracking quality.** Keep QC manifests, detection repair reports, identity warnings, and settings used for each run.
+- **Prepare paper-ready local result folders.** Results are saved locally under `RESULT/` or run-specific output folders and are intentionally not committed to GitHub.
+
+Main menu actions:
+
+| Action | What it does |
+| --- | --- |
+| **Track Cells** | Runs the full tracking and migration-analysis workflow. |
+| **Train Cell Line** | Trains morphology recognition from approved public data or local user folders. |
+| **Train Phenotype** | Uses the same training workflow for experiment-specific phenotype labels. |
+| **Analyze Results** | Reopens existing CSV outputs and regenerates analysis plots. |
+| **Help** | Shows workflow and output guidance inside the app. |
 
 ---
 
@@ -169,21 +197,16 @@ flowchart LR
     A[Launch CytoTrack AI] --> B{Main menu}
     B -->|Track Cells| C[Select image folder]
     C --> D[Specify cell line or cell lines]
-    D --> E[Train from website QAgents,<br/>user data, or existing model]
+    D --> E[Train from public data,<br/>user data, or existing model]
     E --> P[Adjust brightness / contrast /<br/>gamma / filter — live preview]
     P --> F[Tracking loop<br/>detect borders · track centroids ·<br/>classify · recover]
     F --> G[Migration analysis<br/>CSV + plots + video]
 
-    B -->|Train Phenotype Local| H[Point at class folders]
-    H --> I[ViT or CNN transfer learning]
+    B -->|Train Cell Line| H[Public data approval<br/>or local class folders]
+    B -->|Train Phenotype| H
+    H --> I[Morphology classifier]
     I --> J[Model saved → usable in Track Cells]
 
-    B -->|Train Phenotype Online DB| K[Search open-license catalogue]
-    K --> L[Pick datasets per phenotype]
-    L --> M[Download · verify licence ·<br/>write attribution manifest]
-    M --> I
-
-    B -->|Generate Test Data| N[Synthetic time-lapse<br/>with optional overlap density]
     B -->|Analyze Results| O[Re-plot an existing CSV]
 ```
 
@@ -191,7 +214,7 @@ flowchart LR
 
 | Choice | What it does |
 |------|--------------|
-| **Website QAgents** | Resolve requested cell lines, search licence-checked public microscopy resources, download enough open images where available, then train before tracking. |
+| **Train Cell Line From Public Data** | Resolve requested cell lines, search licence-checked public microscopy resources, show the proposed sources for user approval, download enough open images where available, then train before tracking. |
 | **User Data** | Train from a local folder with one class folder per requested cell line; the folder names are checked before training starts. |
 | **Existing Model** | Load a previously trained `class_map.json` model for the requested cell lines. |
 | **Single Line Label** | Allowed only for one declared cell line; all tracks are labelled with that line while detection/tracking still uses cell borders and centroids. |
@@ -221,9 +244,15 @@ tracking_YYYYMMDD_HHMMSS/
 
 ---
 
-## Phenotype training from open-licensed data
+## Cell-line and phenotype training
 
-Use **Train Phenotype (Online DB)** from the main menu when you do not have your own labelled imagery.
+Use **Train Cell Line** or **Train Phenotype** from the main menu. Both open the same workflow:
+
+1. Enter one or more cell lines.
+2. Choose **Train Cell Line From Public Data** or **User Data**.
+3. Approve public data sources before download, or select local class folders.
+4. Train the morphology classifier.
+5. Use the model during **Track Cells**.
 
 The catalogue ships with curated entries from:
 
@@ -258,7 +287,7 @@ Attempting to register a non-open licence raises `ValueError`.
 python3 tests/run_all.py
 ```
 
-The suite covers the tracker, the detector, the synthetic generator, the debris reasoner, the hardware profiler (including a regression test that guarantees the tuner never touches accuracy parameters), lost-cell recovery, overlap-safe tracking, and the open-image-library licence filter. Total: **60 tests, no network calls**.
+The suite covers the tracker, detector, GUI visibility, self-repair loop, pipeline architecture contracts, public-data training agents, debris reasoning, hardware profiling, lost-cell recovery, overlap-safe tracking, and the open-image-library licence filter.
 
 ---
 
@@ -302,9 +331,9 @@ CytoTrack_AI/
 
 ## Licensing
 
-CytoTrack AI project source is released under the MIT License; see `LICENSE` and `CITATION.cff`. The application will only download or redistribute data that carries a permissive licence (`CC-0`, `CC-BY-*`, `CC-BY-SA-*`, `MIT`, `Apache-2.0`, `BSD-*`, public domain). If you fine-tune a classifier on datasets fetched via **Train Phenotype (Online DB)**, retain the per-download `manifest.json` and the top-level `LICENSES.json` so attributions flow downstream.
+CytoTrack AI project source is released under the MIT License; see `LICENSE` and `CITATION.cff`. The application will only download or redistribute data that carries a permissive licence (`CC-0`, `CC-BY-*`, `CC-BY-SA-*`, `MIT`, `Apache-2.0`, `BSD-*`, public domain). If you fine-tune a classifier on datasets fetched via **Train Cell Line From Public Data**, retain the per-download `manifest.json` and the top-level `LICENSES.json` so attributions flow downstream.
 
-Paper-facing result bundles should retain `RESULT/RESEARCH_USE_PROVENANCE.md` plus each run's `manifest.json`, migration CSVs, videos, plots, dashboards, and QC audits. Optional non-commercial components such as NVIDIA LocateAnything-3B are opt-in and must be declared in the run manifest if used.
+Generated `RESULT/` folders are local outputs and are intentionally ignored by Git. For manuscript supplements, keep each run's local `manifest.json`, migration CSVs, videos, plots, dashboards, and QC audits with the paper archive, not in the source repository. Optional non-commercial components such as NVIDIA LocateAnything-3B are opt-in and must be declared in the run manifest if used.
 
 Third-party acknowledgements:
 

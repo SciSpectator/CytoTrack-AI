@@ -64,12 +64,12 @@ def main():
                 break
             elif "Track" in choice:
                 run_tracking(gui)
-            elif "Train Cell Line" in choice:
-                run_qagent_morphology_pretraining(gui)
+            elif "Train Cell Line" in choice or "Train Phenotype" in choice:
+                run_cell_line_or_phenotype_training(gui)
             elif "Train Phenotype (Online" in choice or "Online DB" in choice:
                 run_training_online(gui)
             elif "Train" in choice:
-                run_training(gui)
+                run_cell_line_or_phenotype_training(gui)
             elif "Analyze" in choice:
                 run_analysis(gui)
             elif "Help" in choice:
@@ -253,10 +253,10 @@ def _ask_tracking_cell_line_context(gui):
     source = gui.show_message(
         "Pre-Tracking Training",
         "Choose how the morphology classifier should be prepared before "
-        "tracking. Website resources are licence-checked and cached outside "
-        "RESULT; user data must be arranged as one folder per cell line.",
+        "tracking. Public data resources are licence-checked and cached "
+        "outside RESULT; user data must be arranged as one folder per cell line.",
         [
-            "Website QAgents",
+            "Train Cell Line From Public Data",
             "User Data",
             "Existing Model",
             "Single Line Label",
@@ -270,7 +270,7 @@ def _ask_tracking_cell_line_context(gui):
     model_path = None
     training_source = source
 
-    if source == "Website QAgents":
+    if source == "Train Cell Line From Public Data":
         model_path = run_qagent_morphology_pretraining(
             gui,
             default_cell_lines=cell_lines,
@@ -305,7 +305,7 @@ def _ask_tracking_cell_line_context(gui):
         if len(cell_lines) != 1:
             gui.show_message(
                 "Training Required",
-                "Multiple cell lines require Website QAgents, User Data, "
+                "Multiple cell lines require public-data training, User Data, "
                 "or an Existing Model so cells can be classified by line.",
                 ["OK"],
             )
@@ -322,6 +322,62 @@ def _ask_tracking_cell_line_context(gui):
         "model_path": model_path,
         "single_cell_type": cell_lines[0] if len(cell_lines) == 1 else None,
     }
+
+
+def run_cell_line_or_phenotype_training(gui):
+    """Unified GUI path for cell-line and phenotype morphology training."""
+    from qagents import parse_cell_lines
+
+    params = gui.show_input_dialog(
+        "Train Cell Line / Phenotype",
+        [
+            "Cell line(s), comma separated",
+            "Microscopy condition",
+            "Minimum website images per cell line",
+        ],
+        [
+            "HeLa, Huh7",
+            "light microscope phase contrast brightfield DIC",
+            "200",
+        ],
+    )
+    if not params:
+        return None
+
+    try:
+        cell_lines = parse_cell_lines(params[0])
+        condition = (
+            params[1].strip() or
+            "light microscope phase contrast brightfield DIC"
+        )
+        min_images = max(20, int(params[2]))
+    except ValueError:
+        gui.show_message("Error", "Invalid training settings.", ["OK"])
+        return None
+
+    if not cell_lines:
+        gui.show_message("Error", "Enter at least one cell line.", ["OK"])
+        return None
+
+    source = gui.show_message(
+        "Training Source",
+        "Choose how to build the morphology training set for:\n"
+        f"{', '.join(cell_lines)}\n\n"
+        "Public-data training searches licence-checked resources and asks "
+        "for approval before downloading images. User Data uses local class "
+        "folders named for each requested cell line.",
+        ["Train Cell Line From Public Data", "User Data", "Cancel"],
+    )
+    if source == "Train Cell Line From Public Data":
+        return run_qagent_morphology_pretraining(
+            gui,
+            default_cell_lines=cell_lines,
+            default_condition=condition,
+            default_min_images=min_images,
+        )
+    if source == "User Data":
+        return run_training(gui, expected_cell_lines=cell_lines)
+    return None
 
 
 def _classify_one(classifier, kind, detector, image, bbox):
@@ -1106,7 +1162,7 @@ def run_qagent_morphology_pretraining(
     from pipeline_architecture import build_quality_first_run_plan
 
     params = gui.show_input_dialog(
-        "QAgents Morphology Pretraining",
+        "Train Cell Line From Public Data",
         [
             "Cell lines separated by comma (e.g. MCF7, U2OS, Huh7)",
             "Microscopy condition",
@@ -1162,7 +1218,7 @@ def run_qagent_morphology_pretraining(
     blocked = [p for p in plan.class_plans if p.status != "ready"]
     if blocked:
         msg_lines = [
-            "QAgents created a research plan, but not every cell line has "
+            "Public-data search created a plan, but not every cell line has "
             "an open-licensed public source with enough matching images.",
             "",
             f"Plan: {plan_path}",
@@ -1172,6 +1228,30 @@ def run_qagent_morphology_pretraining(
         for item in blocked:
             msg_lines.append(f"  - {item.cell_line}: {'; '.join(item.notes)}")
         gui.show_message("QAgent Plan Needs Data", "\n".join(msg_lines), ["OK"])
+        return None
+
+    approval_lines = [
+        "Public-data search found licence-approved candidate image resources.",
+        "Approve these sources before any public images are downloaded:",
+        "",
+    ]
+    for item in plan.class_plans:
+        approval_lines.extend([
+            f"{item.cell_line} -> {item.selected_dataset_id}",
+            f"  {item.selected_dataset_name}",
+            f"  licence: {item.selected_dataset_licence}",
+            f"  approx images: {item.approx_available_images}",
+            f"  source: {item.selected_dataset_homepage}",
+            "",
+        ])
+    approval = gui.show_message(
+        "Approve Public Training Images",
+        "\n".join(approval_lines),
+        ["Approve Public Images", "Use Local Files", "Cancel"],
+    )
+    if approval == "Use Local Files":
+        return run_training(gui, expected_cell_lines=cell_lines)
+    if approval != "Approve Public Images":
         return None
 
     limits = gui.show_input_dialog(
@@ -1189,7 +1269,7 @@ def run_qagent_morphology_pretraining(
         return
 
     try:
-        progress = gui.show_progress("QAgents morphology training", 100)
+        progress = gui.show_progress("Public-data morphology training", 100)
         progress(5, "Downloading open-licensed public images...")
         data_root = os.path.join(qagent_root, "training_data", model_name)
         agent.prepare_training_data(
