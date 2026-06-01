@@ -159,6 +159,9 @@ class CellDetector:
         # Adaptive state (set by calibrate()).
         self.median_area: float = 0.0
         self.median_diameter: float = 0.0
+        self.morphology_min_area: float = 0.0
+        self.morphology_max_area: float = 0.0
+        self.morphology_duplicate_center_distance: float = 0.0
         self.merge_area_factor: float = 1.8  # contour this much larger => split
         self._calibrated: bool = False
         # Latency-only toggles (do NOT alter accuracy of the core
@@ -194,6 +197,40 @@ class CellDetector:
         self._locate_device = None
         self._locate_dtype = None
         self._locate_failed = False
+
+    def set_morphology_constraints(
+        self,
+        median_area_px: float = 0.0,
+        median_diameter_px: float = 0.0,
+        duplicate_center_distance_px: float = 0.0,
+        min_valid_area_px: float = 0.0,
+        max_valid_area_px: float = 0.0,
+        **_: float,
+    ) -> None:
+        """
+        Apply pre-tracking cell-line morphology scale.
+
+        Public-data training learns the expected cell footprint. The detector
+        uses it to suppress two centers inside one cell body and to reject
+        tiny edge fragments or huge merged artefacts before the tracker can
+        turn them into duplicate IDs.
+        """
+        if median_area_px > 0:
+            self.median_area = float(median_area_px)
+            self.min_area = int(max(self.min_area, min_valid_area_px or median_area_px * 0.35))
+            self.max_area = int(max(self.min_area + 1,
+                                    max_valid_area_px or median_area_px * 4.0))
+            self.morphology_min_area = float(self.min_area)
+            self.morphology_max_area = float(self.max_area)
+        if median_diameter_px > 0:
+            self.median_diameter = float(median_diameter_px)
+            self.expected_max_diameter = int(max(
+                self.expected_max_diameter,
+                round(float(median_diameter_px) * 1.5),
+            ))
+        if duplicate_center_distance_px > 0:
+            self.morphology_duplicate_center_distance = float(
+                duplicate_center_distance_px)
 
     # ---------------------------------------------------------- public API
     def calibrate(self, image: np.ndarray) -> dict:
@@ -284,10 +321,30 @@ class CellDetector:
         if self._calibrated and self.median_area > 0:
             all_detections = self._split_merged(signal, all_detections)
 
+        all_detections = self._filter_morphology_scale(all_detections)
         detections = self._nms(all_detections)
         if self.whole_cell_border:
             detections = self._repair_whole_cell_borders(detections)
         return detections
+
+    def _filter_morphology_scale(
+        self,
+        dets: List[Detection],
+    ) -> List[Detection]:
+        if not dets:
+            return dets
+        if self.morphology_min_area <= 0 and self.morphology_max_area <= 0:
+            return dets
+        out: List[Detection] = []
+        for det in dets:
+            if self.morphology_min_area > 0 and det.area < self.morphology_min_area:
+                det.qc_flags.append("rejected_below_trained_cell_scale")
+                continue
+            if self.morphology_max_area > 0 and det.area > self.morphology_max_area:
+                det.qc_flags.append("rejected_above_trained_cell_scale")
+                continue
+            out.append(det)
+        return out
 
     # ------------------------------------------------------ border repair
     def _ellipse_contour(self, det: Detection) -> np.ndarray:
@@ -846,6 +903,10 @@ class CellDetector:
                     break
                 dx = d.center_x - k.center_x
                 dy = d.center_y - k.center_y
+                abs_center_thr = self.morphology_duplicate_center_distance
+                if abs_center_thr > 0 and np.hypot(dx, dy) < abs_center_thr:
+                    ok = False
+                    break
                 min_r = min(d.w, d.h, k.w, k.h) / 2.0
                 if np.hypot(dx, dy) < min_r * center_frac:
                     ok = False

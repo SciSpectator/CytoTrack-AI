@@ -34,6 +34,7 @@ CytoTrack AI is built around a full cell-migration workflow:
 
 - **Track cells in time-lapse microscopy movies.** Select a folder of image frames, adjust brightness/contrast/gamma/filter settings, detect cell borders, and track cell centers frame by frame.
 - **Train cell-line morphology before tracking.** Enter one or more cell lines, then train from approved public data or from local user-provided folders.
+- **Use trained cell scale during tracking.** The morphology model stores expected cell area, diameter, duplicate-center distance, and border margin, so two dots on one cell are merged before they become two tracks.
 - **Use public data with approval.** The program searches curated open-licensed public microscopy resources, shows the proposed datasets and licenses, and downloads only after the user approves.
 - **Use local laboratory data.** Select a folder with one subfolder per cell line; the program checks that requested classes are present before training.
 - **Load an existing model.** Reuse a trained `class_map.json` model during tracking.
@@ -41,6 +42,7 @@ CytoTrack AI is built around a full cell-migration workflow:
 - **Compare cell lines.** Generate statistical summaries and plots for multiple labelled groups.
 - **Generate visual outputs.** Save overlay videos, trajectory plots, velocity histograms, displacement plots, rose plots, MSD plots, and interactive Plotly dashboards.
 - **Audit tracking quality.** Keep QC manifests, detection repair reports, identity warnings, and settings used for each run.
+- **Ignore frame-border entries/exits.** In declared cell-line runs, cells touching or entering through the image border are excluded; cells that leave the frame are terminated and are not revived if they reappear.
 - **Prepare paper-ready local result folders.** Results are saved locally under `RESULT/` or run-specific output folders and are intentionally not committed to GitHub.
 
 Main menu actions:
@@ -318,7 +320,7 @@ python3 tools/self_upgrade_validation_loop.py --iterations 1 --frames-long 180 -
 
 This runs the full test suite, 30 short real-movie clips, 30 longer-window
 real-movie clips, long-video validation, frame-folder result generation,
-morphology training for HeLa/Huh7, dashboard/video readability checks, and QC
+morphology training for declared cell lines, dashboard/video readability checks, and QC
 manifest validation. The report is written to
 `RESULT/self_upgrade_validation/self_upgrade_validation_report.json`.
 

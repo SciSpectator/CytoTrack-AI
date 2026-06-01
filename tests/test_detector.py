@@ -78,3 +78,21 @@ def test_whole_cell_border_repair_replaces_fragment_contour():
     assert repaired.area / (repaired.w * repaired.h) > 0.55
     assert abs(repaired.center_x - 50) < 3
     assert abs(repaired.center_y - 35) < 3
+
+
+def test_morphology_scale_suppresses_duplicate_centers():
+    det = CellDetector()
+    det.set_morphology_constraints(
+        median_area_px=400,
+        median_diameter_px=24,
+        duplicate_center_distance_px=14,
+        min_valid_area_px=20,
+        max_valid_area_px=2000,
+    )
+    a = Detection(20, 20, 24, 24, 32, 32, 450, confidence=0.9)
+    b = Detection(25, 22, 24, 24, 37, 34, 430, confidence=0.8)
+
+    result = det._nms([a, b], iou_thr=0.95)
+
+    assert len(result) == 1
+    assert result[0] is a

@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Train two cell-line morphology prototypes, then compare migration.
+"""Train cell-line morphology prototypes, then compare migration.
 
 This script uses public Cell Tracking Challenge movies already present in
 ``real_cell_movies``:
 
 * DIC-C2DH-HeLa -> HeLa
 * Fluo-C2DL-Huh7 -> Huh7
+* PhC-C2DH-U373 -> U373
 
 The morphology model is intentionally stored in ``model_cache``. Only final
 tracking/comparison outputs are stored in ``RESULT``.
@@ -49,6 +50,12 @@ CELL_LINES = {
         "source": "Cell Tracking Challenge Fluo-C2DL-Huh7",
         "condition": "fluorescence microscopy migration movie",
     },
+    "PhC-C2DH-U373": {
+        "cell_line": "U373",
+        "color": "#ee862d",
+        "source": "Cell Tracking Challenge PhC-C2DH-U373",
+        "condition": "phase-contrast light microscopy migration movie",
+    },
 }
 
 
@@ -72,6 +79,7 @@ class PrototypeModel:
     mean: List[float]
     std: List[float]
     prototypes: Dict[str, List[float]]
+    scale_stats: Dict[str, dict]
     training_accuracy: float
     samples_per_class: Dict[str, int]
     notes: List[str]
@@ -194,18 +202,42 @@ def train_prototypes(samples: pd.DataFrame) -> PrototypeModel:
         )
         correct += int(pred == truth)
     counts = samples.groupby("cell_line").size().astype(int).to_dict()
+    scale_stats: Dict[str, dict] = {}
+    for cls, group in samples.groupby("cell_line"):
+        area = group["area_px"].astype(float).to_numpy()
+        diameter = np.maximum(
+            group["bbox_w"].astype(float).to_numpy(),
+            group["bbox_h"].astype(float).to_numpy(),
+        )
+        median_area = float(np.median(area))
+        median_diameter = float(np.median(diameter))
+        scale_stats[str(cls)] = {
+            "median_area_px": median_area,
+            "area_p10_px": float(np.percentile(area, 10)),
+            "area_p90_px": float(np.percentile(area, 90)),
+            "median_diameter_px": median_diameter,
+            "diameter_p10_px": float(np.percentile(diameter, 10)),
+            "diameter_p90_px": float(np.percentile(diameter, 90)),
+            "duplicate_center_distance_px": float(max(3.0, median_diameter * 0.55)),
+            "border_margin_px": float(max(4.0, median_diameter * 0.50)),
+            "min_valid_area_px": float(max(4.0, np.percentile(area, 10) * 0.45)),
+            "max_valid_area_px": float(max(median_area * 3.5,
+                                           np.percentile(area, 90) * 1.9)),
+        }
     return PrototypeModel(
         classes=classes,
         feature_columns=FEATURE_COLUMNS,
         mean=mean.tolist(),
         std=std.tolist(),
         prototypes=prototypes,
+        scale_stats=scale_stats,
         training_accuracy=float(correct / max(1, len(samples))),
         samples_per_class={str(k): int(v) for k, v in counts.items()},
         notes=[
             "Prototype morphology model trained before migration comparison.",
             "Features come from labelled CTC masks: shape, border geometry, and intensity.",
-            "This model is for cell-line morphology/color provenance in the result dashboard.",
+            "Scale statistics are used to suppress duplicate centers on the same cell.",
+            "Border margin is cell-line specific: entering/exiting edge objects are ignored.",
         ],
     )
 
@@ -218,27 +250,16 @@ def write_model_cache(samples: pd.DataFrame, model: PrototypeModel,
               encoding="utf-8") as f:
         json.dump(model.to_dict(), f, indent=2, sort_keys=True)
     source_research = {
-        "purpose": "pre-tracking morphology training for two migration cell lines",
+        "purpose": "pre-tracking morphology training for migration cell lines",
         "sources": [
             {
-                "cell_line": "HeLa",
-                "dataset": "DIC-C2DH-HeLa",
-                "source": "Cell Tracking Challenge",
-                "condition": CELL_LINES["DIC-C2DH-HeLa"]["condition"],
-            },
-            {
-                "cell_line": "Huh7",
-                "dataset": "Fluo-C2DL-Huh7",
-                "source": "Cell Tracking Challenge",
-                "condition": CELL_LINES["Fluo-C2DL-Huh7"]["condition"],
-            },
-            {
-                "cell_line": "Huh7",
-                "dataset": "LIVECell",
-                "source": "Sartorius LIVECell",
-                "condition": "phase-contrast morphology reference",
-                "license_note": "research/reference only here; CC-BY-NC-4.0 is not auto-used for redistributable training",
-            },
+                "cell_line": info["cell_line"],
+                "dataset": dataset,
+                "source": info["source"],
+                "condition": info["condition"],
+                "color": info["color"],
+            }
+            for dataset, info in CELL_LINES.items()
         ],
     }
     with open(os.path.join(output_dir, "source_research.json"), "w",
@@ -282,9 +303,9 @@ def build_comparison_dashboard(result_root: str, model_dir: str,
 
     summary_all = pd.concat(summary_frames, ignore_index=True)
     detailed_all = pd.concat(detailed_frames, ignore_index=True)
-    summary_all.to_csv(os.path.join(output_dir, "two_cell_line_migration_summary.csv"),
+    summary_all.to_csv(os.path.join(output_dir, "cell_line_migration_summary.csv"),
                        index=False)
-    detailed_all.to_csv(os.path.join(output_dir, "two_cell_line_migration_detailed.csv"),
+    detailed_all.to_csv(os.path.join(output_dir, "cell_line_migration_detailed.csv"),
                        index=False)
 
     with open(os.path.join(model_dir, "morphology_model.json"), encoding="utf-8") as f:
@@ -352,7 +373,7 @@ def build_comparison_dashboard(result_root: str, model_dir: str,
                 ),
             ), row=2, col=2)
         fig.update_layout(template="plotly_white", height=820,
-                          title="Two Cell-Line Migration After Morphology Training")
+                          title="Cell-Line Migration After Morphology Training")
         fig.update_yaxes(title_text="um/min", row=1, col=1)
         fig.update_yaxes(title_text="um", row=1, col=2)
         fig.update_yaxes(title_text="CDE", row=2, col=1)
@@ -368,8 +389,12 @@ def build_comparison_dashboard(result_root: str, model_dir: str,
         mean_displacement=("Displacement_um", "mean"),
         mean_cde=("CDE", "mean"),
     ).reset_index()
+    color_by_line = {
+        info["cell_line"]: info["color"]
+        for info in CELL_LINES.values()
+    }
     kpi_rows = "\n".join(
-        f"<tr><td><span class='swatch' style='background:{CELL_LINES['DIC-C2DH-HeLa' if r.Cell_Line == 'HeLa' else 'Fluo-C2DL-Huh7']['color']}'></span>{r.Cell_Line}</td>"
+        f"<tr><td><span class='swatch' style='background:{color_by_line.get(r.Cell_Line, '#808080')}'></span>{r.Cell_Line}</td>"
         f"<td>{int(r.cells)}</td><td>{r.mean_velocity:.3f}</td>"
         f"<td>{r.mean_displacement:.2f}</td><td>{r.mean_cde:.3f}</td></tr>"
         for r in kpis.itertuples()
@@ -379,7 +404,7 @@ def build_comparison_dashboard(result_root: str, model_dir: str,
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Two Cell-Line Migration Comparison</title>
+  <title>Cell-Line Migration Comparison</title>
   <style>
     body {{ margin:0; font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; background:#f5f7f8; color:#1e2a2f; }}
     main {{ max-width:1280px; margin:0 auto; padding:20px; }}
@@ -394,8 +419,8 @@ def build_comparison_dashboard(result_root: str, model_dir: str,
 </head>
 <body>
 <main>
-  <h1>Two Cell-Line Migration Comparison</h1>
-  <p>Before comparison, morphology prototypes were trained for HeLa and Huh7 from labelled public CTC frames. HeLa is magenta; Huh7 is green.</p>
+  <h1>Cell-Line Migration Comparison</h1>
+  <p>Before comparison, morphology prototypes were trained from labelled public microscopy frames. Each declared cell line keeps its own color in individual videos, combined views, CSV metrics, and dashboards.</p>
   <section class="panel">
     <table>
       <thead><tr><th>Cell line</th><th>Tracks</th><th>Mean velocity</th><th>Mean displacement</th><th>Mean CDE</th></tr></thead>
@@ -405,7 +430,7 @@ def build_comparison_dashboard(result_root: str, model_dir: str,
   <section class="panel">{plot_html}</section>
   <section class="panel">
     <p>Training cache: <code>{os.path.relpath(model_dir, REPO_ROOT)}</code></p>
-    <p>Downloads: <code>two_cell_line_migration_summary.csv</code>, <code>two_cell_line_migration_detailed.csv</code>, <code>morphology_training_used.json</code></p>
+    <p>Downloads: <code>cell_line_migration_summary.csv</code>, <code>cell_line_migration_detailed.csv</code>, <code>morphology_training_used.json</code></p>
   </section>
 </main>
 </body>
@@ -419,9 +444,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", default=os.path.join(REPO_ROOT, "real_cell_movies"))
     parser.add_argument("--result-root", default=os.path.join(REPO_ROOT, "RESULT"))
-    parser.add_argument("--model-name", default="hela_huh7_morphology")
+    parser.add_argument("--model-name", default="cell_line_morphology")
     parser.add_argument("--max-samples-per-class", type=int, default=2000)
-    parser.add_argument("--sequence", action="append", default=["01", "02"])
+    parser.add_argument("--sequence", action="append")
     parser.add_argument("--skip-tracking-regeneration", action="store_true",
                         help="Use existing RESULT folders instead of regenerating after training.")
     return parser.parse_args()
@@ -433,7 +458,7 @@ def main() -> int:
                              args.model_name)
     samples = collect_training_samples(
         args.root,
-        sequences=args.sequence,
+        sequences=args.sequence or ["01", "02"],
         max_samples_per_class=args.max_samples_per_class,
     )
     model = train_prototypes(samples)
@@ -450,8 +475,11 @@ def main() -> int:
         print("[tracking] regenerating after morphology training", flush=True)
         subprocess.run(cmd, cwd=REPO_ROOT, check=True)
 
-    output_dir = os.path.join(args.result_root, "two_cell_line_migration_comparison")
-    build_comparison_dashboard(args.result_root, cache_dir, output_dir)
+    output_dir = os.path.join(args.result_root, "cell_line_migration_comparison")
+    if args.skip_tracking_regeneration and not _result_folders(args.result_root):
+        print("[migration-comparison] skipped dashboard; no result folders found")
+    else:
+        build_comparison_dashboard(args.result_root, cache_dir, output_dir)
     print(f"[morphology-training] samples={len(samples)} "
           f"accuracy={model.training_accuracy:.3f}")
     print(f"[morphology-training] model={cache_dir}")

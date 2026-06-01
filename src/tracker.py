@@ -201,6 +201,8 @@ class Track:
     # doesn't "breathe" every frame from contour noise.
     w_ema: float = 0.0
     h_ema: float = 0.0
+    border_exited: bool = False
+    ignored_entry: bool = False
 
     @property
     def frame_count(self) -> int:
@@ -262,11 +264,17 @@ class CellTracker:
     def __init__(self, max_missed: int = 15, iou_threshold: float = 0.1,
                  max_distance: float = 80.0,
                  suppress_duplicate_detections: bool = False,
-                 association_model=None):
+                 association_model=None,
+                 ignore_border_objects: bool = False,
+                 retire_on_border_exit: bool = False,
+                 closed_world_tracking: bool = False):
         self.max_missed = max_missed
         self.iou_threshold = iou_threshold
         self.max_distance = max_distance
         self.suppress_duplicate_detections = bool(suppress_duplicate_detections)
+        self.ignore_border_objects = bool(ignore_border_objects)
+        self.retire_on_border_exit = bool(retire_on_border_exit)
+        self.closed_world_tracking = bool(closed_world_tracking)
         self.tracks: Dict[int, Track] = {}
         self._next_id = 0
         self._width = 0
@@ -275,6 +283,41 @@ class CellTracker:
         self.association_model = association_model
         self._frame_idx = 0
         self._expected_active_cap = 0
+        self.morphology_median_area: float = 0.0
+        self.morphology_median_diameter: float = 0.0
+        self.morphology_duplicate_center_distance: float = 0.0
+        self.border_margin_px: float = 0.0
+
+    def set_morphology_constraints(
+        self,
+        median_area_px: float = 0.0,
+        median_diameter_px: float = 0.0,
+        duplicate_center_distance_px: float = 0.0,
+        border_margin_px: float = 0.0,
+        **_: float,
+    ) -> None:
+        """
+        Apply cell-line scale learned before tracking.
+
+        The tracker uses these values as biological guardrails: two active
+        centers closer than the trained same-cell distance are treated as one
+        cell, and frame-border entry/exit margins scale with the cell size.
+        """
+        if median_area_px > 0:
+            self.morphology_median_area = float(median_area_px)
+        if median_diameter_px > 0:
+            self.morphology_median_diameter = float(median_diameter_px)
+            self.max_distance = float(max(self.max_distance,
+                                          median_diameter_px * 2.5))
+        if duplicate_center_distance_px > 0:
+            self.morphology_duplicate_center_distance = float(
+                duplicate_center_distance_px)
+        if border_margin_px > 0:
+            self.border_margin_px = float(border_margin_px)
+        self.suppress_duplicate_detections = True
+        self.ignore_border_objects = True
+        self.retire_on_border_exit = True
+        self.closed_world_tracking = True
 
     @property
     def active_count(self) -> int:
@@ -287,6 +330,61 @@ class CellTracker:
     def attach_detector(self, detector) -> None:
         """Optional: supply a CellDetector for automatic re-detection."""
         self._detector = detector
+
+    def _border_margin_for(
+        self,
+        bbox: Tuple[int, int, int, int],
+    ) -> float:
+        if self.border_margin_px > 0:
+            return float(self.border_margin_px)
+        return float(max(4.0, min(max(1, bbox[2]), max(1, bbox[3])) * 0.5))
+
+    def _touches_frame_border(
+        self,
+        bbox: Tuple[int, int, int, int],
+    ) -> bool:
+        if self._width <= 0 or self._height <= 0:
+            return False
+        x, y, w, h = bbox
+        margin = self._border_margin_for(bbox)
+        cx = x + w / 2.0
+        cy = y + h / 2.0
+        if cx < margin or cy < margin:
+            return True
+        if cx > self._width - margin or cy > self._height - margin:
+            return True
+        if x <= 0 or y <= 0:
+            return True
+        if x + w >= self._width - 1 or y + h >= self._height - 1:
+            return True
+        return False
+
+    def _retire_track_for_border_detection(
+        self,
+        bbox: Tuple[int, int, int, int],
+    ) -> bool:
+        """Terminate an existing track when its cell is observed at border."""
+        if not self.tracks:
+            return False
+        bx = bbox[0] + bbox[2] / 2.0
+        by = bbox[1] + bbox[3] / 2.0
+        gate = max(
+            self.max_distance,
+            self.morphology_median_diameter * 2.0
+            if self.morphology_median_diameter > 0 else 0.0,
+        )
+        for track in self.tracks.values():
+            if not track.is_active or not track.boxes:
+                continue
+            last = track.boxes[-1]
+            lx = last[0] + last[2] / 2.0
+            ly = last[1] + last[3] / 2.0
+            if _bbox_iou(bbox, last) > 0.10 or np.hypot(bx - lx, by - ly) <= gate:
+                track.border_exited = True
+                track.is_active = False
+                track.boxes.append(bbox)
+                return True
+        return False
 
     def _is_anomalous_step(
         self,
@@ -365,6 +463,8 @@ class CellTracker:
         det_appearance: List[Optional[np.ndarray]] = []
         for det in detections:
             bbox = _det_to_centroid_box(det)
+            if self.ignore_border_objects and self._touches_frame_border(bbox):
+                continue
             det_boxes.append(bbox)
             det_appearance.append(_extract_appearance(frame, bbox))
 
@@ -434,6 +534,12 @@ class CellTracker:
                 dist = float(np.hypot(cx - ox, cy - oy))
                 min_dim = max(1.0, min(box[2], box[3], other[2], other[3]))
                 area_ratio = max(area, other_area) / max(1.0, min(area, other_area))
+
+                if (self.morphology_duplicate_center_distance > 0
+                        and dist < self.morphology_duplicate_center_distance
+                        and area_ratio < 3.0):
+                    duplicate = True
+                    break
 
                 if iou > 0.60 and dist < min_dim * 0.35:
                     duplicate = True
@@ -566,7 +672,11 @@ class CellTracker:
         det_boxes: List[Tuple[int, int, int, int]] = []
         if detections is not None:
             for d in detections:
-                det_boxes.append(_det_to_centroid_box(d))
+                bbox = _det_to_centroid_box(d)
+                if self.ignore_border_objects and self._touches_frame_border(bbox):
+                    self._retire_track_for_border_detection(bbox)
+                    continue
+                det_boxes.append(bbox)
 
         # Kalman predict for every active track
         active_items = [(tid, t) for tid, t in self.tracks.items() if t.is_active]
@@ -637,6 +747,13 @@ class CellTracker:
                     if track.missed_frames > self.max_missed:
                         track.is_active = False
                     continue
+                if self.retire_on_border_exit and self._touches_frame_border(new_box):
+                    track.border_exited = True
+                    track.is_active = False
+                    track.boxes.append(new_box)
+                    matched_track_ids.add(tid)
+                    matched_det_idx.add(c)
+                    continue
                 track.boxes.append(new_box)
                 track.missed_frames = 0
                 track.hits += 1
@@ -676,6 +793,13 @@ class CellTracker:
                     if t.missed_frames > self.max_missed:
                         t.is_active = False
                     continue
+                if self.retire_on_border_exit and self._touches_frame_border(new_box):
+                    t.border_exited = True
+                    t.is_active = False
+                    t.boxes.append(new_box)
+                    matched_track_ids.add(tid)
+                    matched_det_idx.add(recovered_idx)
+                    continue
                 t.boxes.append(new_box)
                 t.missed_frames = 0
                 t.hits += 1
@@ -697,6 +821,11 @@ class CellTracker:
                 if self._is_anomalous_step(t, pred_box):
                     t.is_active = False
                     continue
+                if self.retire_on_border_exit and self._touches_frame_border(pred_box):
+                    t.border_exited = True
+                    t.is_active = False
+                    t.boxes.append(pred_box)
+                    continue
                 t.boxes.append(pred_box)
                 # do NOT increment missed_frames — merge is not a miss.
                 continue
@@ -705,6 +834,11 @@ class CellTracker:
                 # Coast has extrapolated off the frame — retire rather
                 # than append an off-screen phantom to the trajectory.
                 t.is_active = False
+                continue
+            if self.retire_on_border_exit and self._touches_frame_border(pred_box):
+                t.border_exited = True
+                t.is_active = False
+                t.boxes.append(pred_box)
                 continue
             t.boxes.append(pred_box)
             t.missed_frames += 1
@@ -722,6 +856,9 @@ class CellTracker:
         # explosive track counts and low GT coverage.
         for j, det_box in enumerate(det_boxes):
             if j in matched_det_idx:
+                continue
+            if self.ignore_border_objects and self._touches_frame_border(det_box):
+                matched_det_idx.add(j)
                 continue
             # Check active tracks first. A duplicate box should never revive a
             # retired duplicate ID or spawn a new one while an active track
@@ -766,10 +903,19 @@ class CellTracker:
                 t._kf.x[4] = 0.0
                 t._kf.x[5] = 0.0
                 new_box = t._kf.bbox()
+                if self.retire_on_border_exit and self._touches_frame_border(new_box):
+                    t.border_exited = True
+                    t.is_active = False
+                    t.boxes.append(new_box)
+                    matched_det_idx.add(j)
+                    continue
                 t.boxes.append(new_box)
                 area = float(max(1, det_box[2]) * max(1, det_box[3]))
                 t.update_appearance(det_appearance[j], area)
                 t.update_display_size(det_box[2], det_box[3])
+                matched_det_idx.add(j)
+                continue
+            if self.closed_world_tracking:
                 matched_det_idx.add(j)
                 continue
             self._spawn_track(det_box, appearance=det_appearance[j],
@@ -907,7 +1053,13 @@ class CellTracker:
                     continue
                 dist = float(np.hypot(cx_a - cx_b, cy_a - cy_b))
                 dist_thr = 0.45 if self.suppress_duplicate_detections else 0.2
-                if dist >= min_dim * dist_thr:
+                max_same_cell_dist = min_dim * dist_thr
+                if self.morphology_duplicate_center_distance > 0:
+                    max_same_cell_dist = max(
+                        max_same_cell_dist,
+                        self.morphology_duplicate_center_distance,
+                    )
+                if dist >= max_same_cell_dist:
                     continue
                 iou = _bbox_iou(bx_a, bx_b)
                 iou_thr = 0.50 if self.suppress_duplicate_detections else 0.8
@@ -999,6 +1151,10 @@ class CellTracker:
             bx = b[0] + b[2] / 2.0
             by = b[1] + b[3] / 2.0
             rad = min(b[2], b[3], det_box[2], det_box[3]) / 2.0
+            if (self.morphology_duplicate_center_distance > 0
+                    and np.hypot(dx - bx, dy - by) <
+                    self.morphology_duplicate_center_distance):
+                return True
             if (_bbox_iou(det_box, b) > 0.08
                     and np.hypot(dx - bx, dy - by) < rad * 0.55):
                 return True
@@ -1030,6 +1186,14 @@ class CellTracker:
             bx = b[0] + b[2] / 2.0
             by = b[1] + b[3] / 2.0
             dist = float(np.hypot(dx - bx, dy - by))
+            if self.morphology_duplicate_center_distance > 0:
+                ratio = max(d_area, max(1.0, t.area_ema)) / max(
+                    1e-6,
+                    min(d_area, max(1.0, t.area_ema)),
+                )
+                if (dist < self.morphology_duplicate_center_distance
+                        and ratio < 3.0):
+                    return True
             rad = min(b[2], b[3], det_box[2], det_box[3]) / 2.0
             if rad <= 0:
                 continue
@@ -1087,6 +1251,8 @@ class CellTracker:
             if t.is_active:
                 continue
             if not t.boxes:
+                continue
+            if getattr(t, "border_exited", False):
                 continue
             if t.missed_frames > self.max_missed * 2:
                 continue

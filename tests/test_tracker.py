@@ -66,6 +66,41 @@ def test_tracker_initialize_spawns_tracks():
     assert tr.active_count == 2
 
 
+def test_morphology_scale_prevents_two_tracks_on_one_cell():
+    frame = np.zeros((120, 120, 3), dtype=np.uint8)
+    tr = CellTracker()
+    tr.set_morphology_constraints(
+        median_area_px=400,
+        median_diameter_px=24,
+        duplicate_center_distance_px=14,
+        border_margin_px=8,
+    )
+    tr.initialize(frame, [(40, 40, 24, 24), (45, 42, 24, 24)])
+
+    assert len(tr.tracks) == 1
+
+
+def test_border_exit_closes_track_and_blocks_new_entries():
+    frame = np.zeros((120, 120, 3), dtype=np.uint8)
+    tr = CellTracker(max_missed=2)
+    tr.set_morphology_constraints(
+        median_area_px=400,
+        median_diameter_px=20,
+        duplicate_center_distance_px=12,
+        border_margin_px=10,
+    )
+    tr.initialize(frame, [(50, 50, 20, 20), (0, 50, 20, 20)])
+    assert len(tr.tracks) == 1
+
+    tr.update(frame, detections=[(100, 50, 20, 20)])
+    original = tr.tracks[0]
+    assert original.border_exited is True
+    assert original.is_active is False
+
+    tr.update(frame, detections=[(60, 50, 20, 20)])
+    assert len(tr.tracks) == 1
+
+
 def test_tracker_uses_detection_centroid_not_bbox_edge_center():
     frame = np.zeros((120, 160, 3), dtype=np.uint8)
     # Deliberately inconsistent bbox and centroid. This represents the

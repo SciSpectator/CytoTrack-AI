@@ -546,6 +546,11 @@ def _do_tracking(gui, files, pixel_size, time_per_frame,
     from ai_assistant import VisualLLMHelper
     from lost_cell_recovery import LostCellRecovery
     from hardware_profile import detect_hardware
+    from morphology_constraints import (
+        apply_constraints,
+        constraints_for_cell_line,
+        load_morphology_model,
+    )
     from pipeline_architecture import (build_quality_first_run_plan,
                                        write_run_manifest)
     from self_repair import (SelfRepairingDetectorLoop,
@@ -604,6 +609,36 @@ def _do_tracking(gui, files, pixel_size, time_per_frame,
                   "w", encoding="utf-8") as f:
             _json.dump(pretracking_manifest, f, indent=2, sort_keys=True)
 
+        morphology_constraints = None
+        if len(declared_cell_lines) == 1:
+            candidate_models = []
+            if pretracking_model_path:
+                candidate_models.extend([
+                    pretracking_model_path,
+                    os.path.dirname(pretracking_model_path),
+                ])
+            candidate_models.append(os.path.join(
+                os.path.dirname(__file__),
+                "model_cache",
+                "cell_line_morphology",
+            ))
+            for candidate in candidate_models:
+                try:
+                    model = load_morphology_model(candidate)
+                    morphology_constraints = constraints_for_cell_line(
+                        model, declared_cell_lines[0])
+                    if morphology_constraints:
+                        break
+                except Exception:
+                    continue
+        if morphology_constraints:
+            pretracking_manifest["morphology_scale_constraints"] = morphology_constraints
+            with open(os.path.join(output_dir, "pretracking_training_manifest.json"),
+                      "w", encoding="utf-8") as f:
+                _json.dump(pretracking_manifest, f, indent=2, sort_keys=True)
+            print("[morphology] scale constraints loaded: "
+                  f"{morphology_constraints}")
+
         progress(5, "Self-repairing detector calibration...")
         reasoner = DebrisReasoner(strategy="auto")
         visual_llm = VisualLLMHelper(prefer="auto")
@@ -625,6 +660,11 @@ def _do_tracking(gui, files, pixel_size, time_per_frame,
                 det, img, raw, reasoner=reasoner),
             output_dir=output_dir,
         )
+        if morphology_constraints:
+            apply_constraints(detector=detector, constraints=morphology_constraints)
+            redetected = detector.detect(first)
+            detections, _ = filter_debris(
+                detector, first, redetected, reasoner=reasoner)
         raw_detections = detections
         print("[detector/self-repair] selected="
               f"{repair_report.selected_sensitivity} "
@@ -670,7 +710,12 @@ def _do_tracking(gui, files, pixel_size, time_per_frame,
         tracker = CellTracker(
             max_missed=15,
             suppress_duplicate_detections=sensitivity in ("locate", "high", "max"),
+            ignore_border_objects=bool(declared_cell_lines),
+            retire_on_border_exit=bool(declared_cell_lines),
+            closed_world_tracking=bool(declared_cell_lines),
         )
+        if morphology_constraints:
+            apply_constraints(tracker=tracker, constraints=morphology_constraints)
         # Tune Hungarian gating to the cell size so dense scenes don't ID-swap.
         tr_calib = tracker.calibrate(detections)
         print(f"Tracker gating: {tr_calib}")

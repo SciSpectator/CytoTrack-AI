@@ -32,6 +32,7 @@ Point = Tuple[int, int]
 CELL_LINE_COLORS = {
     "DIC-C2DH-HeLa": (220, 60, 190),   # HeLa: magenta
     "Fluo-C2DL-Huh7": (45, 185, 95),   # Huh7: green
+    "PhC-C2DH-U373": (238, 134, 45),   # U373: amber/blue contrast
 }
 
 

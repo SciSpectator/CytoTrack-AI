@@ -152,6 +152,12 @@ class LostCellRecovery:
                 continue
             if not track.boxes:
                 continue
+            if getattr(track, "border_exited", False):
+                results.append(RecoveryResult(
+                    track_id=tid, recovered=False,
+                    method="border",
+                    reasoning="track already terminated at frame border"))
+                continue
             last_bbox = track.boxes[-1]
 
             if _near_border(last_bbox, frame.shape, self.border_margin):

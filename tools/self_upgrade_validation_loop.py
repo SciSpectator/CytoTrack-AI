@@ -137,9 +137,9 @@ def validate_small_gt(out_dir: Path) -> dict:
 
 
 def validate_training_compare(out_dir: Path) -> dict:
-    dashboard = out_dir / "two_cell_line_migration_comparison" / "dashboard.html"
-    model = ROOT / "model_cache" / "hela_huh7_morphology" / "morphology_model.json"
-    summary = out_dir / "two_cell_line_migration_comparison" / "two_cell_line_migration_summary.csv"
+    dashboard = out_dir / "cell_line_migration_comparison" / "dashboard.html"
+    model = ROOT / "model_cache" / "cell_line_morphology" / "morphology_model.json"
+    summary = out_dir / "cell_line_migration_comparison" / "cell_line_migration_summary.csv"
     if not dashboard.exists() or dashboard.stat().st_size == 0:
         raise GateError("training comparison dashboard missing")
     if not model.exists():
@@ -148,8 +148,10 @@ def validate_training_compare(out_dir: Path) -> dict:
     if float(model_data.get("training_accuracy", 0.0)) < 0.80:
         raise GateError(f"low morphology training accuracy: {model_data.get('training_accuracy')}")
     df = pd.read_csv(summary)
-    if set(df["Cell_Line"].dropna().unique()) != {"HeLa", "Huh7"}:
-        raise GateError("training comparison missing HeLa/Huh7 groups")
+    required = {"HeLa", "Huh7"}
+    present = set(df["Cell_Line"].dropna().unique())
+    if not required.issubset(present):
+        raise GateError(f"training comparison missing required groups: {required - present}")
     return {
         "training_accuracy": float(model_data["training_accuracy"]),
         "classes": model_data["classes"],
@@ -252,7 +254,7 @@ def main() -> int:
                 lambda: validate_small_gt(out_dir / "small_gt"),
             ),
             (
-                "morphology_training_two_cell_lines",
+                "morphology_training_cell_lines",
                 [
                     sys.executable, "tools/train_and_compare_two_cell_lines.py",
                     "--result-root", str(out_dir / "training_compare"),

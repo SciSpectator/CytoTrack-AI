@@ -409,9 +409,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fps", type=float, default=12.0)
     parser.add_argument("--pixel-size", type=float, default=1.0)
     parser.add_argument("--time-per-frame", type=float, default=60.0)
-    parser.add_argument("--dataset", action="append",
-                        default=["DIC-C2DH-HeLa", "Fluo-C2DL-Huh7"])
-    parser.add_argument("--sequence", action="append", default=["02"])
+    parser.add_argument("--dataset", action="append")
+    parser.add_argument("--sequence", action="append")
     return parser.parse_args()
 
 
@@ -419,8 +418,10 @@ def main() -> int:
     args = parse_args()
     os.makedirs(args.output_dir, exist_ok=True)
     outputs = []
-    for dataset in args.dataset:
-        for sequence in args.sequence:
+    datasets = args.dataset or ["DIC-C2DH-HeLa", "Fluo-C2DL-Huh7"]
+    sequences = args.sequence or ["02"]
+    for dataset in datasets:
+        for sequence in sequences:
             print(f"[long-validation] {dataset}/{sequence} -> {args.frames} frames",
                   flush=True)
             out = generate_long_bundle(
