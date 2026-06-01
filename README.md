@@ -322,6 +322,24 @@ morphology training for HeLa/Huh7, dashboard/video readability checks, and QC
 manifest validation. The report is written to
 `RESULT/self_upgrade_validation/self_upgrade_validation_report.json`.
 
+To train the frame-to-frame tracking linker from public CTC tracking movies:
+
+```bash
+python3 tools/train_tracking_linker.py --output-dir RESULT/tracking_linker_training --model-dir model_cache/tracking_linker --trees 60
+```
+
+This learns the association model for frame `t -> t+1` from TRA masks, compares
+the trained model against the current baseline linker on held-out sequences, and
+records whether deployment is allowed. If the trained model does not improve
+accuracy, CytoTrack AI keeps the existing tracker and stores the regression
+evidence instead of silently using a worse model.
+
+For GPU/Colab training, open:
+
+```text
+notebooks/train_tracking_linker_colab.ipynb
+```
+
 ---
 
 ## Project layout

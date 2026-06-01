@@ -18,6 +18,8 @@ from typing import Dict, List, Tuple, Optional
 
 import numpy as np
 
+from tracking_linker import build_link_features, predict_link_probability
+
 try:
     import cv2
     HAS_CV2 = True
@@ -259,7 +261,8 @@ class CellTracker:
 
     def __init__(self, max_missed: int = 15, iou_threshold: float = 0.1,
                  max_distance: float = 80.0,
-                 suppress_duplicate_detections: bool = False):
+                 suppress_duplicate_detections: bool = False,
+                 association_model=None):
         self.max_missed = max_missed
         self.iou_threshold = iou_threshold
         self.max_distance = max_distance
@@ -269,6 +272,7 @@ class CellTracker:
         self._width = 0
         self._height = 0
         self._detector = None
+        self.association_model = association_model
         self._frame_idx = 0
         self._expected_active_cap = 0
 
@@ -495,12 +499,27 @@ class CellTracker:
                 size_term = min(1.5, np.log(ratio))
                 app_term = _appearance_distance(track.appearance,
                                                 det_appearance[j])
-                cost[i, j] = (
+                heuristic_cost = (
                     (1.0 - iou) * 1.0
                     + (dist / self.max_distance) * 0.5
                     + app_term * 0.7
                     + size_term * 0.5
                 )
+                if self.association_model is not None:
+                    appearance_similarity = 1.0 - app_term
+                    features = build_link_features(
+                        p_box,
+                        d_box,
+                        source_area=t_area,
+                        target_area=d_area,
+                        appearance_similarity=appearance_similarity,
+                    )
+                    prob = predict_link_probability(
+                        self.association_model, features)
+                    learned_cost = 1.0 - prob
+                    cost[i, j] = 0.35 * min(1.0, heuristic_cost / 2.5) + learned_cost
+                else:
+                    cost[i, j] = heuristic_cost
         return cost
 
     def _near_neighbors(
