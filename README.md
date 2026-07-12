@@ -396,3 +396,20 @@ Third-party acknowledgements:
 - **Drosophila Kc167** — Jones T.R. et al. (2005).
 
 PyTorch, OpenCV, PyQt5, scikit-learn, pandas, SciPy, matplotlib, plotly — each under its own open licence.
+
+
+## Acknowledgements
+
+### Project Origin
+
+This software was developed to support the analysis of experimental datasets generated within Aldona Szewczyk's Student Research Project at the Jagiellonian University entitled:
+
+> "Wpływ doksorubicyny na reaktywność komórek ludzkiego glejaka wielopostaciowego i śródbłonka oraz na ich wzajemne kontakty w ko-hodowlach w warunkach normoksji i hipoksji."
+
+**Principal Investigator:** Aldona Szewczyk
+**Scientific Supervisor:** Prof. Jarosław Czyż, PhD, DSc
+**Institution:** Department of Cell Biology, Faculty of Biochemistry, Biophysics and Biotechnology, Jagiellonian University, Poland
+
+Aldona Szewczyk contributed the scientific conceptualization, definition of the biological problem, biological workflow design, definition of analytical objectives and functional requirements, selection and provision of experimental time-lapse microscopy datasets, domain expertise in cell biology and time-lapse microscopy, biological evaluation and validation of software outputs, and continuous scientific guidance and biological feedback throughout the software development process.
+
+The software implementation and computational development were carried out by Mateusz Szczepaniak.
